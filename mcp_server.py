@@ -5,6 +5,7 @@ from typing import Any, Optional, List, Dict
 from pathlib import Path
 
 import httpx
+import aiofiles
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("mcp-server")
@@ -231,8 +232,9 @@ async def get_project_summary() -> Dict[str, Any]:
         project_stats = {}
         total_issues = 0
         
-        with open(issues_file, 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
+        async with aiofiles.open(issues_file, 'r', encoding='utf-8') as f:
+            content = await f.read()
+            reader = csv.DictReader(content.splitlines())
             
             for row in reader:
                 project = row.get('PROJECT', 'Unknown')
