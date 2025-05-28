@@ -1,0 +1,46 @@
+# --- Build Stage ---
+FROM python:3.9-slim-bullseye AS builder
+LABEL stage="fakesnow-builder"
+
+WORKDIR /app_build
+
+ENV VIRTUAL_ENV=/opt/venv
+RUN python -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+COPY requirements.txt .
+
+RUN echo "--- Installing dependencies from requirements.txt ---" && \
+    pip install --no-cache-dir -r requirements.txt && \
+    echo "--- requirements.txt installation complete ---"
+
+RUN echo "--- PIP FREEZE (Builder Stage) ---" && \
+    pip freeze && \
+    echo "--- END PIP FREEZE ---"
+
+# --- Runtime Stage ---
+FROM python:3.9-slim-bullseye AS runtime
+LABEL stage="fakesnow-runtime"
+
+WORKDIR /fakesnow_app # Standard working directory
+
+# Copy the virtual environment
+COPY --from=builder /opt/venv /opt/venv
+
+# Set PATH to use the virtual environment's Python and installed scripts
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+EXPOSE 8080
+
+# Environment variables that fakesnow server might use (check fakesnow CLI help for actual env var support)
+# Alternatively, these are passed as CLI args if supported
+ENV FAKESNOW_HOST="0.0.0.0"
+ENV FAKESNOW_PORT="8080"
+
+# Command to run the fakesnow server using its CLI
+# The `fakesnow` script is installed into $VIRTUAL_ENV/bin by pip.
+# Adding "--port $FAKESNOW_PORT" helps argparse identify 'server' as the command.
+# Using `sh -c` to allow environment variable expansion if needed, though direct exec is cleaner.
+# Let's try direct exec first, which is generally better.
+CMD ["fakesnow", "server", "--host", "0.0.0.0", "--port", "8080"]

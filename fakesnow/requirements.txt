@@ -1,0 +1,8 @@
+# requirements.txt
+
+# Pinning to a specific version is good practice.
+# fakesnow[server] should pull in fastapi and uvicorn,
+# but we list them explicitly to ensure they are installed due to previous issues.
+fakesnow[server]==0.9.38
+fastapi>=0.95.0
+uvicorn[standard]>=0.21.1
