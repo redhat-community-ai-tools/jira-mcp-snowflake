@@ -36,3 +36,27 @@ Example configuration for running with Podman:
   }
 }
 ```
+
+example to add to VSCODE continue
+```json
+  "experimental": {
+      "modelContextProtocolServers": [
+        {
+        "name": "jira-mcp-snowflake",
+        "transport": {
+          "type": "stdio",
+          "command": "podman",
+          "args": [
+            "run",
+            "-i",
+            "--rm",
+            "-e", "API_BASE_URL",
+            "-e", "API_KEY",
+            "-e", "MCP_TRANSPORT",
+            "localhost/jira-mcp-snowflake:latest"
+          ]
+        }
+      }
+    ]
+  }
+```
