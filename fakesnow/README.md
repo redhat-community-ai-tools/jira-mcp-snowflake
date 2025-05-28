@@ -5,7 +5,7 @@
 1. Build the container image with podman
 
 ```bash
-podman build -t fakesnow:latest -f Containerfile .
+podman build --no-cache -t fakesnow-server:latest . 
 ```
 
 2. Run the container with local podman

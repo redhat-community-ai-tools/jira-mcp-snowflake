@@ -10,13 +10,8 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 COPY requirements.txt .
 
-RUN echo "--- Installing dependencies from requirements.txt ---" && \
-    pip install --no-cache-dir -r requirements.txt && \
+RUN pip install --no-cache-dir -r requirements.txt && \
     echo "--- requirements.txt installation complete ---"
-
-RUN echo "--- PIP FREEZE (Builder Stage) ---" && \
-    pip freeze && \
-    echo "--- END PIP FREEZE ---"
 
 # --- Runtime Stage ---
 FROM python:3.9-slim-bullseye AS runtime
@@ -25,14 +20,16 @@ LABEL stage="fakesnow-runtime"
 WORKDIR /fakesnow_app
 
 COPY --from=builder /opt/venv /opt/venv
+
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 COPY wrapper.py /fakesnow_app/wrapper.py
-ENTRYPOINT ["/opt/venv/bin/python", "/fakesnow_app/wrapper.py"]
 
 EXPOSE 8080
+
 ENV FAKESNOW_HOST="0.0.0.0"
+
 ENV FAKESNOW_PORT="8080"
 
 CMD ["/opt/venv/bin/python", "/fakesnow_app/wrapper.py"]
