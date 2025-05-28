@@ -6,5 +6,6 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mcp_server.py ./
+COPY Snowflake_CSV ./Snowflake_CSV
 
 CMD ["python", "mcp_server.py"]
