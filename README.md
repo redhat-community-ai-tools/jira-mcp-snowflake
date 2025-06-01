@@ -1,10 +1,10 @@
 # Jira MCP Server
 
-A Model Context Protocol (MCP) server that provides access to JIRA issue data stored in CSV files exported from Snowflake. This server enables AI assistants to query, filter, and analyze JIRA issues through a standardized interface.
+A Model Context Protocol (MCP) server that provides access to JIRA issue data stored in Snowflake. This server enables AI assistants to query, filter, and analyze JIRA issues through a standardized interface.
 
 ## Overview
 
-This MCP server reads JIRA data from CSV files and provides three main tools for interacting with the data:
+This MCP server connects to Snowflake to query JIRA data and provides three main tools for interacting with the data:
 
 - **`list_issues`** - Query and filter JIRA issues with various criteria
 - **`get_issue_details`** - Get detailed information for a specific issue by key
@@ -13,11 +13,9 @@ This MCP server reads JIRA data from CSV files and provides three main tools for
 ## Features
 
 ### Data Sources
-The server reads from the following CSV files in the `Snowflake_CSV/` directory:
-- `JIRA_ISSUE_NON_PII.csv` - Main issue data (non-personally identifiable information)
-- `JIRA_LABEL_RHAI.csv` - Issue labels and tags
-- `JIRA_COMPONENT_RHAI.csv` - Component information
-- `JIRA_COMMENT_NON_PII.csv` - Issue comments (non-PII)
+The server connects to Snowflake and queries the following tables:
+- `JIRA_ISSUE_NON_PII` - Main issue data (non-personally identifiable information)
+- `JIRA_LABEL_RHAI` - Issue labels and tags
 
 ### Available Tools
 
@@ -49,7 +47,25 @@ Generate statistics across all projects:
 
 - Python 3.8+
 - Podman or Docker
-- CSV data files in `Snowflake_CSV/` directory
+- Access to Snowflake with appropriate credentials
+
+## Environment Variables
+
+The following environment variables are used to configure the Snowflake connection:
+
+### Required
+- **`SNOWFLAKE_TOKEN`** - Your Snowflake authentication token (Bearer token)
+
+### Optional
+- **`SNOWFLAKE_BASE_URL`** - Snowflake API base URL  
+  - Default: `https://gdadclc-rhprod.snowflakecomputing.com/api/v2`
+- **`SNOWFLAKE_DATABASE`** - Snowflake database name  
+  - Default: `JIRA_DB`
+- **`SNOWFLAKE_SCHEMA`** - Snowflake schema name  
+  - Default: `RHAI_MARTS`
+- **`MCP_TRANSPORT`** - Transport protocol for MCP communication  
+  - Default: `stdio`
+
 
 ## Installation & Setup
 
@@ -66,7 +82,7 @@ cd jira-mcp-snowflake
 pip install -r requirements.txt
 ```
 
-3. Ensure CSV data files are present in `Snowflake_CSV/` directory
+3. Set up environment variables (see Environment Variables section above)
 
 4. Run the server:
 ```bash
@@ -98,6 +114,7 @@ Example configuration for running with Podman:
         "run",
         "-i",
         "--rm",
+        "-e", "SNOWFLAKE_TOKEN=your_token_here",
         "-e", "MCP_TRANSPORT=stdio",
         "localhost/jira-mcp-snowflake:latest"
       ]
@@ -123,6 +140,7 @@ Example configuration to add to VS Code Continue:
             "run",
             "-i",
             "--rm",
+            "-e", "SNOWFLAKE_TOKEN=your_token_here",
             "-e", "MCP_TRANSPORT=stdio",
             "localhost/jira-mcp-snowflake:latest"
           ]
@@ -159,17 +177,19 @@ result = await get_issue_details(issue_key="SMQE-1280")
 result = await get_project_summary()
 ```
 
-## Environment Variables
-
-- `MCP_TRANSPORT` - Transport protocol for MCP communication (default: "stdio")
-
 ## Data Privacy
 
-This server is designed to work with non-personally identifiable information (non-PII) data only. The CSV files should be sanitized to remove any sensitive personal information before use.
+This server is designed to work with non-personally identifiable information (non-PII) data only. The Snowflake tables should contain sanitized data with any sensitive personal information removed.
+
+## Security Considerations
+
+- **Environment Variables**: Store sensitive information like `SNOWFLAKE_TOKEN` in environment variables, never in code
+- **Token Security**: Ensure your Snowflake token is kept secure and rotated regularly
+- **Network Security**: Use HTTPS endpoints and secure network connections
+- **Access Control**: Follow principle of least privilege for Snowflake database access
 
 ## Dependencies
 
 - `httpx` - HTTP client library
 - `fastmcp` - Fast MCP server framework
-- `aiofiles` - Asynchronous file operations
 
