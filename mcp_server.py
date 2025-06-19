@@ -22,17 +22,8 @@ MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")
 
 # Snowflake API configuration from environment variables
 SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL", "https://gdadclc-rhprod.snowflakecomputing.com/api/v2")
-SNOWFLAKE_TOKEN = (
-    os.environ["SNOWFLAKE_TOKEN"]
-    if MCP_TRANSPORT == "stdio"
-    else mcp.get_context().request_context.request.headers["X-Snowflake-Token"]
-)
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE", "JIRA_DB")
 SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA", "RHAI_MARTS")
-
-# Validate required environment variables
-if not SNOWFLAKE_TOKEN:
-    logger.warning("SNOWFLAKE_TOKEN environment variable is not set")
 
 def sanitize_sql_value(value: str) -> str:
     """Sanitize a SQL value to prevent injection attacks"""
@@ -53,12 +44,17 @@ async def make_snowflake_request(
     data: dict[str, Any] = None
 ) -> dict[str, Any] | None:
     """Make a request to Snowflake API"""
-    if not SNOWFLAKE_TOKEN:
+    snowflake_token = (
+        os.environ["SNOWFLAKE_TOKEN"]
+        if MCP_TRANSPORT == "stdio"
+        else mcp.get_context().request_context.request.headers["X-Snowflake-Token"]
+    )
+    if not snowflake_token:
         logger.error("SNOWFLAKE_TOKEN environment variable is required but not set")
         return None
         
     headers = {
-        "Authorization": f"Bearer {SNOWFLAKE_TOKEN}",
+        "Authorization": f"Bearer {snowflake_token}",
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
