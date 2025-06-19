@@ -18,9 +18,15 @@ logger = logging.getLogger(__name__)
 
 mcp = FastMCP("jira-mcp-snowflake")
 
+MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")
+
 # Snowflake API configuration from environment variables
 SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL", "https://gdadclc-rhprod.snowflakecomputing.com/api/v2")
-SNOWFLAKE_TOKEN = os.environ.get("SNOWFLAKE_TOKEN")
+SNOWFLAKE_TOKEN = (
+    os.environ["SNOWFLAKE_TOKEN"]
+    if MCP_TRANSPORT == "stdio"
+    else mcp.get_context().request_context.request.headers["X-Snowflake-Token"]
+)
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE", "JIRA_DB")
 SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA", "RHAI_MARTS")
 
@@ -438,4 +444,4 @@ async def get_project_summary() -> Dict[str, Any]:
         return {"error": f"Error generating project summary from Snowflake: {str(e)}"}
 
 if __name__ == "__main__":
-    mcp.run(transport=os.environ.get("MCP_TRANSPORT", "stdio"))
+    mcp.run(transport=MCP_TRANSPORT)
