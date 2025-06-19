@@ -123,6 +123,23 @@ Example configuration for running with Podman:
 }
 ```
 
+## Connecting to a remote instance
+
+Example configuration for connecting to a remote instance:
+
+```json
+{
+  "mcpServers": {
+    "jira-mcp-snowflake": {
+      "url": "https://jira-mcp-snowflake.example.com/sse",
+      "headers": {
+        "X-Snowflake-Token": "your_token_here"
+      }
+    }
+  }
+}
+```
+
 ### VS Code Continue Integration
 
 Example configuration to add to VS Code Continue:
