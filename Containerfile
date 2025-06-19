@@ -1,4 +1,4 @@
-FROM registry.redhat.io/ubi9/python-311
+FROM registry.access.redhat.com/ubi9/python-311
 
 WORKDIR /app
 
@@ -8,7 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY mcp_server.py ./
-
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
 # SNOWFLAKE_TOKEN - Snowflake authentication token (required)
