@@ -24,7 +24,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/redhat-user-workloads/rhoai-tenant/jira-mcp-snowflake:on-pr-{{revision}}
+    value: quay.io/redhat-ai-tools/jira-mcp-snowflake:on-pr-{{revision}}
   - name: image-expires-after
     value: 5d
   - name: dockerfile
