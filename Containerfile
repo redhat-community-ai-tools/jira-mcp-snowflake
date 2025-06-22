@@ -8,6 +8,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
 COPY mcp_server.py ./
+COPY config.py ./
+COPY database.py ./
+COPY tools.py ./
+COPY metrics.py ./
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
 # SNOWFLAKE_TOKEN - Snowflake authentication token (required)
@@ -17,5 +21,8 @@ COPY mcp_server.py ./
 
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
+
+# Expose metrics port
+EXPOSE 8000
 
 CMD ["python", "mcp_server.py"]
