@@ -17,6 +17,8 @@ The server connects to Snowflake and queries the following tables:
 - `JIRA_ISSUE_NON_PII` - Main issue data (non-personally identifiable information)
 - `JIRA_LABEL_RHAI` - Issue labels and tags
 
+**Note**: Table names are expected to exist in your configured Snowflake database and schema.
+
 ### Available Tools
 
 #### 1. List Issues (`list_issues`)
@@ -55,14 +57,11 @@ The following environment variables are used to configure the Snowflake connecti
 
 ### Required
 - **`SNOWFLAKE_TOKEN`** - Your Snowflake authentication token (Bearer token)
+- **`SNOWFLAKE_BASE_URL`** - Snowflake API base URL (e.g., `https://your-account.snowflakecomputing.com/api/v2`)
+- **`SNOWFLAKE_DATABASE`** - Snowflake database name containing your JIRA data
+- **`SNOWFLAKE_SCHEMA`** - Snowflake schema name containing your JIRA tables
 
 ### Optional
-- **`SNOWFLAKE_BASE_URL`** - Snowflake API base URL  
-  - Default: `https://gdadclc-rhprod.snowflakecomputing.com/api/v2`
-- **`SNOWFLAKE_DATABASE`** - Snowflake database name  
-  - Default: `JIRA_DB`
-- **`SNOWFLAKE_SCHEMA`** - Snowflake schema name  
-  - Default: `RHAI_MARTS`
 - **`MCP_TRANSPORT`** - Transport protocol for MCP communication  
   - Default: `stdio`
 
@@ -115,6 +114,9 @@ Example configuration for running with Podman:
         "-i",
         "--rm",
         "-e", "SNOWFLAKE_TOKEN=your_token_here",
+        "-e", "SNOWFLAKE_BASE_URL=https://your-account.snowflakecomputing.com/api/v2",
+        "-e", "SNOWFLAKE_DATABASE=your_database_name",
+        "-e", "SNOWFLAKE_SCHEMA=your_schema_name",
         "-e", "MCP_TRANSPORT=stdio",
         "localhost/jira-mcp-snowflake:latest"
       ]
@@ -158,6 +160,9 @@ Example configuration to add to VS Code Continue:
             "-i",
             "--rm",
             "-e", "SNOWFLAKE_TOKEN=your_token_here",
+            "-e", "SNOWFLAKE_BASE_URL=https://your-account.snowflakecomputing.com/api/v2",
+            "-e", "SNOWFLAKE_DATABASE=your_database_name",
+            "-e", "SNOWFLAKE_SCHEMA=your_schema_name",
             "-e", "MCP_TRANSPORT=stdio",
             "localhost/jira-mcp-snowflake:latest"
           ]

@@ -21,9 +21,17 @@ mcp = FastMCP("jira-mcp-snowflake")
 MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")
 
 # Snowflake API configuration from environment variables
-SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL", "https://gdadclc-rhprod.snowflakecomputing.com/api/v2")
-SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE", "JIRA_DB")
-SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA", "RHAI_MARTS")
+SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL")
+SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
+SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
+
+# Validate required environment variables
+if not SNOWFLAKE_BASE_URL:
+    raise ValueError("SNOWFLAKE_BASE_URL environment variable is required")
+if not SNOWFLAKE_DATABASE:
+    raise ValueError("SNOWFLAKE_DATABASE environment variable is required")
+if not SNOWFLAKE_SCHEMA:
+    raise ValueError("SNOWFLAKE_SCHEMA environment variable is required")
 
 def sanitize_sql_value(value: str) -> str:
     """Sanitize a SQL value to prevent injection attacks"""
