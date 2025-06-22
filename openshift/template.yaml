@@ -1,0 +1,114 @@
+---
+apiVersion: v1
+kind: Template
+metadata:
+  name: jira-mcp-snowflake
+parameters:
+  - name: IMAGE
+    value: quay.io/redhat-ai-tools/jira-mcp-snowflake
+  - name: IMAGE_TAG
+    value: latest
+  - name: MCP_TRANSPORT
+    value: sse
+  - name: FASTMCP_HOST
+    value: "0.0.0.0"
+  - name: CERT_MANAGER_ISSUER_NAME
+    value: letsencrypt-dns
+  - name: MCP_HOST
+    value: jira-mcp-snowflake.example.com
+  - name: SNOWFLAKE_BASE_URL
+    value: https://example.snowflakecomputing.com/api/v2
+  - name: SNOWFLAKE_DATABASE
+    value: YOUR_DB
+  - name: SNOWFLAKE_SCHEMA
+    value: YOUR_SCHEMA
+objects:
+- apiVersion: apps/v1
+  kind: Deployment
+  metadata:
+    labels:
+      app: jira-mcp-snowflake
+    name: jira-mcp-snowflake
+  spec:
+    progressDeadlineSeconds: 600
+    replicas: 1
+    revisionHistoryLimit: 10
+    selector:
+      matchLabels:
+        app: jira-mcp-snowflake
+    strategy:
+      rollingUpdate:
+        maxSurge: 25%
+        maxUnavailable: 25%
+      type: RollingUpdate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: jira-mcp-snowflake
+      spec:
+        containers:
+        - name: jira-mcp-snowflake
+          image: ${IMAGE}:${IMAGE_TAG}
+          imagePullPolicy: Always
+          env:
+          - name: MCP_TRANSPORT
+            value: ${MCP_TRANSPORT}
+          - name: FASTMCP_HOST
+            value: ${FASTMCP_HOST}
+          - name: SNOWFLAKE_BASE_URL
+            value: ${SNOWFLAKE_BASE_URL}
+          - name: SNOWFLAKE_DATABASE
+            value: ${SNOWFLAKE_DATABASE}
+          - name: SNOWFLAKE_SCHEMA
+            value: ${SNOWFLAKE_SCHEMA}
+          ports:
+          - containerPort: 8000
+            protocol: TCP
+          resources:
+            limits:
+              cpu: 100m
+              memory: 128Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        schedulerName: default-scheduler
+        securityContext: {}
+        terminationGracePeriodSeconds: 30
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: jira-mcp-snowflake
+    labels:
+      app: jira-mcp-snowflake
+  spec:
+    selector:
+      app: jira-mcp-snowflake
+    ports:
+      - protocol: TCP
+        port: 8000
+        targetPort: 8000
+    type: ClusterIP
+- apiVersion: route.openshift.io/v1
+  kind: Route
+  metadata:
+    annotations:
+      cert-manager.io/issuer-kind: ClusterIssuer
+      cert-manager.io/issuer-name: ${CERT_MANAGER_ISSUER_NAME}
+    name: jira-mcp-snowflake
+    labels:
+      app: jira-mcp-snowflake
+  spec:
+    host: ${MCP_HOST}
+    to:
+      kind: Service
+      name: jira-mcp-snowflake
+    port:
+      targetPort: 8000
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
