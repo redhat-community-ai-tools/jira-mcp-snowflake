@@ -17,11 +17,11 @@ parameters:
   - name: MCP_HOST
     value: jira-mcp-snowflake.example.com
   - name: SNOWFLAKE_BASE_URL
-    value: https://gdadclc-rhprod.snowflakecomputing.com/api/v2
+    value: https://example.snowflakecomputing.com/api/v2
   - name: SNOWFLAKE_DATABASE
-    value: JIRA_DB
+    value: YOUR_DB
   - name: SNOWFLAKE_SCHEMA
-    value: RHAI_MARTS
+    value: YOUR_SCHEMA
 objects:
 - apiVersion: apps/v1
   kind: Deployment
