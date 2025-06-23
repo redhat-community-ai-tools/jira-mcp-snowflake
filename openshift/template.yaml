@@ -24,6 +24,8 @@ parameters:
     value: YOUR_SCHEMA
   - name: ENABLE_METRICS
     value: "true"
+  - name: METRICS_PORT
+    value: "8001"
 objects:
 - apiVersion: apps/v1
   kind: Deployment
@@ -97,6 +99,21 @@ objects:
         protocol: TCP
         port: 8000
         targetPort: 8000
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: jira-mcp-snowflake-metrics
+    labels:
+      app: jira-mcp-snowflake-metrics
+  spec:
+    selector:
+      app: jira-mcp-snowflake
+    ports:
+      - name: jira-mcp-snowflake-metrics
+        protocol: TCP
+        port: ${METRICS_PORT}
+        targetPort: ${METRICS_PORT}
     type: ClusterIP
 - apiVersion: route.openshift.io/v1
   kind: Route
