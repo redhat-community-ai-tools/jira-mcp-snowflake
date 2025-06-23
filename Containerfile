@@ -18,7 +18,10 @@ COPY ./src/ ./
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
 
+# Allow metrics port to be configurable at build time
+ARG METRICS_PORT=8000
+
 # Expose metrics port
-EXPOSE 8000
+EXPOSE ${METRICS_PORT}
 
 CMD ["python", "mcp_server.py"]
