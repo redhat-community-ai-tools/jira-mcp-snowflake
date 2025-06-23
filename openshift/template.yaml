@@ -114,8 +114,8 @@ objects:
     ports:
       - name: jira-mcp-snowflake-metrics
         protocol: TCP
-        port: ${METRICS_PORT}
-        targetPort: ${METRICS_PORT}
+        port: ${{METRICS_PORT}}
+        targetPort: ${{METRICS_PORT}}
     type: ClusterIP
 - apiVersion: route.openshift.io/v1
   kind: Route
