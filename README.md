@@ -61,13 +61,13 @@ The server includes optional Prometheus metrics support for monitoring:
 
 ## Architecture
 
-The codebase is organized into modular components:
+The codebase is organized into modular components in the `src/` directory:
 
-- **`mcp_server.py`** - Main server entry point and MCP initialization
-- **`config.py`** - Configuration management and environment variable handling  
-- **`database.py`** - Snowflake database connection and query execution
-- **`tools.py`** - MCP tool implementations and business logic
-- **`metrics.py`** - Optional Prometheus metrics collection and HTTP server
+- **`src/mcp_server.py`** - Main server entry point and MCP initialization
+- **`src/config.py`** - Configuration management and environment variable handling  
+- **`src/database.py`** - Snowflake database connection and query execution
+- **`src/tools.py`** - MCP tool implementations and business logic
+- **`src/metrics.py`** - Optional Prometheus metrics collection and HTTP server
 
 ## Environment Variables
 
@@ -107,7 +107,7 @@ pip install -r requirements.txt
 
 4. Run the server:
 ```bash
-python mcp_server.py
+python src/mcp_server.py
 ```
 
 ### Container Deployment
@@ -268,20 +268,21 @@ The project follows a modular architecture:
 
 ```
 jira-mcp-snowflake/
-├── mcp_server.py      # Main entry point
-├── config.py          # Configuration and environment variables
-├── database.py        # Snowflake database operations
-├── tools.py           # MCP tool implementations
-├── metrics.py         # Prometheus metrics (optional)
-├── requirements.txt   # Python dependencies
-└── README.md         # This file
+├── src/
+│   ├── mcp_server.py      # Main entry point
+│   ├── config.py          # Configuration and environment variables
+│   ├── database.py        # Snowflake database operations
+│   ├── tools.py           # MCP tool implementations
+│   └── metrics.py         # Prometheus metrics (optional)
+├── requirements.txt       # Python dependencies
+└── README.md             # This file
 ```
 
 ### Adding New Tools
 
 To add new MCP tools:
 
-1. Add the tool function to `tools.py`
+1. Add the tool function to `src/tools.py`
 2. Decorate with `@mcp.tool()` and `@track_tool_usage("tool_name")`
 3. Follow the existing patterns for error handling and logging
 4. Update this README with documentation for the new tool
