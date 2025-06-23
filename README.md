@@ -45,11 +45,29 @@ Generate statistics across all projects:
 - Priority distribution per project
 - Overall statistics
 
+### Monitoring & Metrics
+
+The server includes optional Prometheus metrics support for monitoring:
+- **Tool usage tracking** - Track calls to each MCP tool with success/error rates and duration
+- **Snowflake query monitoring** - Monitor database query performance and success rates
+- **Connection tracking** - Track active MCP connections
+- **HTTP endpoints** - `/metrics` for Prometheus scraping and `/health` for health checks
+
 ## Prerequisites
 
 - Python 3.8+
 - Podman or Docker
 - Access to Snowflake with appropriate credentials
+
+## Architecture
+
+The codebase is organized into modular components in the `src/` directory:
+
+- **`src/mcp_server.py`** - Main server entry point and MCP initialization
+- **`src/config.py`** - Configuration management and environment variable handling  
+- **`src/database.py`** - Snowflake database connection and query execution
+- **`src/tools.py`** - MCP tool implementations and business logic
+- **`src/metrics.py`** - Optional Prometheus metrics collection and HTTP server
 
 ## Environment Variables
 
@@ -64,6 +82,10 @@ The following environment variables are used to configure the Snowflake connecti
 ### Optional
 - **`MCP_TRANSPORT`** - Transport protocol for MCP communication  
   - Default: `stdio`
+- **`ENABLE_METRICS`** - Enable Prometheus metrics collection  
+  - Default: `false`
+- **`METRICS_PORT`** - Port for metrics HTTP server  
+  - Default: `8000`
 
 
 ## Installation & Setup
@@ -85,7 +107,7 @@ pip install -r requirements.txt
 
 4. Run the server:
 ```bash
-python mcp_server.py
+python src/mcp_server.py
 ```
 
 ### Container Deployment
@@ -118,12 +140,16 @@ Example configuration for running with Podman:
         "-e", "SNOWFLAKE_DATABASE=your_database_name",
         "-e", "SNOWFLAKE_SCHEMA=your_schema_name",
         "-e", "MCP_TRANSPORT=stdio",
+        "-e", "ENABLE_METRICS=true",
+        "-e", "METRICS_PORT=8000",
         "localhost/jira-mcp-snowflake:latest"
       ]
     }
   }
 }
 ```
+
+Then access metrics at: `http://localhost:8000/metrics`
 
 ## Connecting to a remote instance
 
@@ -164,6 +190,8 @@ Example configuration to add to VS Code Continue:
             "-e", "SNOWFLAKE_DATABASE=your_database_name",
             "-e", "SNOWFLAKE_SCHEMA=your_schema_name",
             "-e", "MCP_TRANSPORT=stdio",
+            "-e", "ENABLE_METRICS=true",
+            "-e", "METRICS_PORT=8000",
             "localhost/jira-mcp-snowflake:latest"
           ]
         }
@@ -199,6 +227,21 @@ result = await get_issue_details(issue_key="SMQE-1280")
 result = await get_project_summary()
 ```
 
+## Monitoring
+
+When metrics are enabled, the server provides the following monitoring endpoints:
+
+- **`/metrics`** - Prometheus metrics endpoint for scraping
+- **`/health`** - Health check endpoint returning JSON status
+
+### Available Metrics
+
+- `mcp_tool_calls_total` - Counter of tool calls by tool name and status
+- `mcp_tool_call_duration_seconds` - Histogram of tool call durations
+- `mcp_active_connections` - Gauge of active MCP connections
+- `mcp_snowflake_queries_total` - Counter of Snowflake queries by status
+- `mcp_snowflake_query_duration_seconds` - Histogram of Snowflake query durations
+
 ## Data Privacy
 
 This server is designed to work with non-personally identifiable information (non-PII) data only. The Snowflake tables should contain sanitized data with any sensitive personal information removed.
@@ -209,9 +252,38 @@ This server is designed to work with non-personally identifiable information (no
 - **Token Security**: Ensure your Snowflake token is kept secure and rotated regularly
 - **Network Security**: Use HTTPS endpoints and secure network connections
 - **Access Control**: Follow principle of least privilege for Snowflake database access
+- **SQL Injection Prevention**: The server includes input sanitization to prevent SQL injection attacks
 
 ## Dependencies
 
-- `httpx` - HTTP client library
+- `httpx` - HTTP client library for Snowflake API communication
 - `fastmcp` - Fast MCP server framework
+- `prometheus_client` - Prometheus metrics client (optional, for monitoring)
+
+## Development
+
+### Code Structure
+
+The project follows a modular architecture:
+
+```
+jira-mcp-snowflake/
+├── src/
+│   ├── mcp_server.py      # Main entry point
+│   ├── config.py          # Configuration and environment variables
+│   ├── database.py        # Snowflake database operations
+│   ├── tools.py           # MCP tool implementations
+│   └── metrics.py         # Prometheus metrics (optional)
+├── requirements.txt       # Python dependencies
+└── README.md             # This file
+```
+
+### Adding New Tools
+
+To add new MCP tools:
+
+1. Add the tool function to `src/tools.py`
+2. Decorate with `@mcp.tool()` and `@track_tool_usage("tool_name")`
+3. Follow the existing patterns for error handling and logging
+4. Update this README with documentation for the new tool
 
