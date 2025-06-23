@@ -68,6 +68,8 @@ objects:
             value: ${SNOWFLAKE_SCHEMA}
           - name: ENABLE_METRICS
             value: ${ENABLE_METRICS}
+          - name: METRICS_PORT
+            value: ${METRICS_PORT}
           ports:
           - containerPort: 8000
             protocol: TCP
