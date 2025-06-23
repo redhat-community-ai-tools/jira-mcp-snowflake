@@ -22,6 +22,8 @@ parameters:
     value: YOUR_DB
   - name: SNOWFLAKE_SCHEMA
     value: YOUR_SCHEMA
+  - name: ENABLE_METRICS
+    value: "true"
 objects:
 - apiVersion: apps/v1
   kind: Deployment
@@ -62,6 +64,8 @@ objects:
             value: ${SNOWFLAKE_DATABASE}
           - name: SNOWFLAKE_SCHEMA
             value: ${SNOWFLAKE_SCHEMA}
+          - name: ENABLE_METRICS
+            value: ${ENABLE_METRICS}
           ports:
           - containerPort: 8000
             protocol: TCP
@@ -89,7 +93,8 @@ objects:
     selector:
       app: jira-mcp-snowflake
     ports:
-      - protocol: TCP
+      - name: jira-mcp-snowflake
+        protocol: TCP
         port: 8000
         targetPort: 8000
     type: ClusterIP
