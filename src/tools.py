@@ -23,8 +23,16 @@ def get_snowflake_token(mcp: FastMCP) -> Optional[str]:
             # Get token from request headers for non-stdio transports
             context = mcp.get_context()
             if context and hasattr(context, 'request_context') and context.request_context:
-                headers = context.request_context.request.headers
-                return headers.get("X-Snowflake-Token")
+                token = context.request_context.request.headers["X-Snowflake-Token"]
+                if token:
+                    logger.info("Successfully retrieved Snowflake token from X-Snowflake-Token header")
+                    return token
+                else:
+                    logger.warning("X-Snowflake-Token header is present but empty")
+            else:
+                logger.error("Request context not available for non-stdio transport")
+        except KeyError:
+            logger.error("X-Snowflake-Token header not found in request headers")
         except Exception as e:
             logger.error(f"Error getting token from request context: {e}")
         return None
