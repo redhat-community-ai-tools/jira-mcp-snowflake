@@ -3,7 +3,7 @@ import json
 import re
 import time
 import logging
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 
 import httpx
 
@@ -11,7 +11,8 @@ from config import (
     MCP_TRANSPORT, 
     SNOWFLAKE_BASE_URL, 
     SNOWFLAKE_DATABASE, 
-    SNOWFLAKE_SCHEMA
+    SNOWFLAKE_SCHEMA,
+    SNOWFLAKE_TOKEN
 )
 from metrics import track_snowflake_query
 
@@ -28,22 +29,19 @@ def sanitize_sql_value(value: str) -> str:
 async def make_snowflake_request(
     endpoint: str, 
     method: str = "POST", 
-    data: dict[str, Any] = None
+    data: dict[str, Any] = None,
+    snowflake_token: Optional[str] = None
 ) -> dict[str, Any] | None:
     """Make a request to Snowflake API"""
-    # Get token based on transport type
-    if MCP_TRANSPORT == "stdio":
-        snowflake_token = os.environ.get("SNOWFLAKE_TOKEN")
-    else:
-        # This would need to be passed in or handled differently in non-stdio mode
-        snowflake_token = os.environ.get("SNOWFLAKE_TOKEN")
+    # Use provided token or fall back to config
+    token = snowflake_token or SNOWFLAKE_TOKEN
     
-    if not snowflake_token:
+    if not token:
         logger.error("SNOWFLAKE_TOKEN environment variable is required but not set")
         return None
         
     headers = {
-        "Authorization": f"Bearer {snowflake_token}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "Content-Type": "application/json"
     }
@@ -75,7 +73,7 @@ async def make_snowflake_request(
         logger.error(f"Unexpected error in Snowflake API request: {str(e)}")
         return None
 
-async def execute_snowflake_query(sql: str) -> List[Dict[str, Any]]:
+async def execute_snowflake_query(sql: str, snowflake_token: Optional[str] = None) -> List[Dict[str, Any]]:
     """Execute a SQL query against Snowflake and return results"""
     start_time = time.time()
     success = False
@@ -92,7 +90,7 @@ async def execute_snowflake_query(sql: str) -> List[Dict[str, Any]]:
         
         logger.info(f"Executing Snowflake query: {sql[:100]}...")  # Log first 100 chars of query
         
-        response = await make_snowflake_request(endpoint, "POST", payload)
+        response = await make_snowflake_request(endpoint, "POST", payload, snowflake_token)
         
         # Check if response is None (indicating an error in API request or JSON parsing)
         if response is None:
@@ -130,7 +128,7 @@ def format_snowflake_row(row_data: List[Any], columns: List[str]) -> Dict[str, A
     
     return {columns[i]: row_data[i] for i in range(len(columns))}
 
-async def get_issue_labels(issue_ids: List[str]) -> Dict[str, List[str]]:
+async def get_issue_labels(issue_ids: List[str], snowflake_token: Optional[str] = None) -> Dict[str, List[str]]:
     """Get labels for given issue IDs from Snowflake"""
     if not issue_ids:
         return {}
@@ -157,7 +155,7 @@ async def get_issue_labels(issue_ids: List[str]) -> Dict[str, List[str]]:
         WHERE ISSUE IN ({ids_str}) AND LABEL IS NOT NULL
         """
         
-        rows = await execute_snowflake_query(sql)
+        rows = await execute_snowflake_query(sql, snowflake_token)
         columns = ["ISSUE", "LABEL"]
         
         for row in rows:

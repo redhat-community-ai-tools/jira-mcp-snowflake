@@ -16,6 +16,14 @@ SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL")
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
 SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
 
+# Snowflake token handling - for stdio transport, get from environment
+# For other transports, it will be retrieved from request context in tools layer
+if MCP_TRANSPORT == "stdio":
+    SNOWFLAKE_TOKEN = os.environ.get("SNOWFLAKE_TOKEN")
+else:
+    # For non-stdio transports, token will be passed from tools layer
+    SNOWFLAKE_TOKEN = None
+
 # Prometheus metrics configuration
 ENABLE_METRICS = os.environ.get("ENABLE_METRICS", "false").lower() == "true"
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))
