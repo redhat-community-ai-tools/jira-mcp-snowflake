@@ -16,6 +16,7 @@ This MCP server connects to Snowflake to query JIRA data and provides three main
 The server connects to Snowflake and queries the following tables:
 - `JIRA_ISSUE_NON_PII` - Main issue data (non-personally identifiable information)
 - `JIRA_LABEL_RHAI` - Issue labels and tags
+- `JIRA_COMMENT_NON_PII` - Issue comments (non-personally identifiable information)
 
 **Note**: Table names are expected to exist in your configured Snowflake database and schema.
 
@@ -37,6 +38,7 @@ Retrieve comprehensive information for a specific JIRA issue by its key (e.g., '
 - Time tracking (original estimate, current estimate, time spent)
 - Metadata (votes, watches, environment, components)
 - Associated labels
+- Comments (with comment body, creation/update timestamps, and role level)
 
 #### 3. Get Project Summary (`get_project_summary`)
 Generate statistics across all projects:
