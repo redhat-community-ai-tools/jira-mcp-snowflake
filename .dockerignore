@@ -1,0 +1,5 @@
+.tekton/
+.venv/
+.gitignore
+.git/
+openshift/
