@@ -57,7 +57,8 @@ The server includes optional Prometheus metrics support for monitoring:
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.10+
+- [UV](https://docs.astral.sh/uv/) (Python package manager)
 - Podman or Docker
 - Access to Snowflake with appropriate credentials
 
@@ -92,6 +93,22 @@ The following environment variables are used to configure the Snowflake connecti
 
 ## Installation & Setup
 
+### Migration from pip to UV
+
+This project has been updated to use UV for dependency management. If you have an existing setup:
+
+1. Remove your old virtual environment:
+   ```bash
+   rm -rf venv/
+   ```
+
+2. Install UV if you haven't already (see Local Development section below)
+
+3. Install dependencies with UV:
+   ```bash
+   uv sync
+   ```
+
 ### Local Development
 
 1. Clone the repository:
@@ -100,16 +117,28 @@ git clone <repository-url>
 cd jira-mcp-snowflake
 ```
 
-2. Install dependencies:
+2. Install UV if you haven't already:
 ```bash
-pip install -r requirements.txt
+# On macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# On Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Or via pip
+pip install uv
 ```
 
-3. Set up environment variables (see Environment Variables section above)
-
-4. Run the server:
+3. Install dependencies:
 ```bash
-python src/mcp_server.py
+uv sync
+```
+
+4. Set up environment variables (see Environment Variables section above)
+
+5. Run the server:
+```bash
+uv run python src/mcp_server.py
 ```
 
 ### Container Deployment
@@ -122,7 +151,7 @@ To build the container image locally using Podman, run:
 podman build -t jira-mcp-snowflake:latest .
 ```
 
-This will create a local image named `jira-mcp-snowflake:latest` that you can use to run the server.
+This will create a local image named `jira-mcp-snowflake:latest` that you can use to run the server. The container now uses UV for fast dependency management.
 
 ## Running with Podman or Docker
 
