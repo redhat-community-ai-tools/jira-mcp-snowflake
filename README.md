@@ -148,7 +148,7 @@ uv run python src/mcp_server.py
 To build the container image locally using Podman, run:
 
 ```sh
-podman build -t jira-mcp-snowflake:latest .
+podman build -t localhost/jira-mcp-snowflake:latest .
 ```
 
 This will create a local image named `jira-mcp-snowflake:latest` that you can use to run the server. The container now uses UV for fast dependency management.
