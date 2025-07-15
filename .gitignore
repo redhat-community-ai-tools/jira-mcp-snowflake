@@ -1,2 +1,4 @@
 Snowflake_CSV/
 .venv/
+**/*.pvc
+__pycache__/
