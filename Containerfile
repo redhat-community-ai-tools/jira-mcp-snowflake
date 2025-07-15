@@ -13,6 +13,9 @@ COPY README.md ./
 # Copy application files (needed for editable install)
 COPY ./src/ ./src/
 
+# Configure UV to use the existing virtual environment
+ENV UV_PROJECT_ENVIRONMENT=/opt/app-root
+
 # Install dependencies using UV
 RUN uv sync --no-dev --no-cache
 # Environment variables (set these when running the container)
