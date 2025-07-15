@@ -5,6 +5,9 @@ WORKDIR /app
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
 
+# Set UV cache directory to a writable location
+ENV UV_CACHE_DIR=/tmp/uv-cache
+
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Copy project files needed for uv sync
@@ -15,15 +18,17 @@ COPY README.md ./
 # Copy application files (needed for editable install)
 COPY ./src/ ./src/
 
-# Install dependencies using UV
-RUN uv sync --locked
+# Create cache directory with proper permissions and install dependencies
+RUN mkdir -p $UV_CACHE_DIR && \
+    chmod 755 $UV_CACHE_DIR && \
+    uv sync --locked
+
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
 # SNOWFLAKE_TOKEN - Snowflake authentication token (required)
 # SNOWFLAKE_DATABASE - Snowflake database name (optional)
 # SNOWFLAKE_SCHEMA - Snowflake schema name (optional)
 # MCP_TRANSPORT - MCP transport type (optional)
-
 
 # Expose metrics port
 EXPOSE 8000
