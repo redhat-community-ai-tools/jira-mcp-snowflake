@@ -327,8 +327,8 @@ def register_tools(mcp: FastMCP) -> None:
             return {"error": f"Error generating project summary from Snowflake: {str(e)}"}
 
     @mcp.tool()
-    @track_tool_usage("list_components")
-    async def list_components(
+    @track_tool_usage("list_jira_components")
+    async def list_jira_components(
         project: Optional[str] = None,
         archived: Optional[str] = None,
         deleted: Optional[str] = None,

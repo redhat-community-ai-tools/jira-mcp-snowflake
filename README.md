@@ -4,11 +4,12 @@ A Model Context Protocol (MCP) server that provides access to JIRA issue data st
 
 ## Overview
 
-This MCP server connects to Snowflake to query JIRA data and provides three main tools for interacting with the data:
+This MCP server connects to Snowflake to query JIRA data and provides four main tools for interacting with the data:
 
 - **`list_jira_issues`** - Query and filter JIRA issues with various criteria
 - **`get_jira_issue_details`** - Get detailed information for a specific issue by key
 - **`get_jira_project_summary`** - Get statistics and summaries for all projects
+- **`list_jira_components`** - List and filter JIRA components with various criteria
 
 ## Features
 
@@ -17,6 +18,7 @@ The server connects to Snowflake and queries the following tables:
 - `JIRA_ISSUE_NON_PII` - Main issue data (non-personally identifiable information)
 - `JIRA_LABEL_RHAI` - Issue labels and tags
 - `JIRA_COMMENT_NON_PII` - Issue comments (non-personally identifiable information)
+- `JIRA_COMPONENT_RHAI` - JIRA project components and their metadata
 
 **Note**: Table names are expected to exist in your configured Snowflake database and schema.
 
@@ -46,6 +48,21 @@ Generate statistics across all projects:
 - Status distribution per project
 - Priority distribution per project
 - Overall statistics
+
+#### 4. List Components (`list_jira_components`)
+Query and filter JIRA components with optional criteria:
+- **Project filtering** - Filter by project ID (e.g., '12325621')
+- **Archived filtering** - Filter by archived status ('Y' or 'N')
+- **Deleted filtering** - Filter by deleted status ('Y' or 'N')
+- **Text search** - Search in component name and description fields
+- **Result limiting** - Control number of results returned (default: 50)
+
+Returns component information including:
+- Component ID, project, name, and description
+- Component URL and assignee details
+- Archived and deleted status
+- Lead information and assignee type
+- Last sync timestamp
 
 ### Monitoring & Metrics
 
