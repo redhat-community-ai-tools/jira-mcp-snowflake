@@ -9,7 +9,8 @@ from config import (
     SNOWFLAKE_BASE_URL,
     SNOWFLAKE_DATABASE,
     SNOWFLAKE_SCHEMA,
-    SNOWFLAKE_TOKEN
+    SNOWFLAKE_TOKEN,
+    SNOWFLAKE_WAREHOUSE
 )
 from metrics import track_snowflake_query
 
@@ -85,7 +86,8 @@ async def execute_snowflake_query(sql: str, snowflake_token: Optional[str] = Non
             "statement": sql,
             "timeout": 60,
             "database": SNOWFLAKE_DATABASE,
-            "schema": SNOWFLAKE_SCHEMA
+            "schema": SNOWFLAKE_SCHEMA,
+            "warehouse": SNOWFLAKE_WAREHOUSE,
         }
 
         logger.info(f"Executing Snowflake query: {sql[:100]}...")  # Log first 100 chars of query
