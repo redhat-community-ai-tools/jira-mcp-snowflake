@@ -14,7 +14,7 @@ COPY README.md ./
 COPY ./src/ ./src/
 
 # Install dependencies using UV
-RUN uv sync --no-dev
+RUN uv sync --no-dev --no-cache
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
 # SNOWFLAKE_TOKEN - Snowflake authentication token (required)
