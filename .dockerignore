@@ -3,3 +3,6 @@
 .gitignore
 .git/
 openshift/
+nowflake_CSV/
+**/*.pvc
+__pycache__/
