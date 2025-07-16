@@ -5,6 +5,7 @@ ENV MCP_TRANSPORT=stdio
 
 COPY . . 
 # Install dependencies
+
 RUN pip install --no-cache-dir .
 
 # Environment variables (set these when running the container)
