@@ -16,7 +16,9 @@ RUN pip3.12 install --no-cache-dir  --upgrade pip && \
 WORKDIR /app
 
 # Set ownership to the user we created. Group 0 (root) is important for OpenShift compatibility.
-RUN chown 1001:0 /app
+RUN chown -R 1001:0 /app && \
+    chgrp -R 0 /app && \
+    chmod -R g+rwX /app
 
 # Switch to the non-root user *before* copying files and installing dependencies
 USER 1001
@@ -29,9 +31,7 @@ COPY README.md ./
 COPY ./src/ ./
 
 # Install dependencies
-RUN uv sync --no-cache --locked && \
-    chgrp -R 0 /app && \
-    chmod -R g+rwX /app
+RUN uv sync --no-cache --locked
 
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
