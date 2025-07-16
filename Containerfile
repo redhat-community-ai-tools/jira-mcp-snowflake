@@ -29,7 +29,9 @@ COPY README.md ./
 COPY ./src/ ./
 
 # Install dependencies
-RUN uv sync --no-cache --locked
+RUN uv sync --no-cache --locked && \
+    chgrp -R 0 /app && \
+    chmod -R g+rwX /app
 
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
