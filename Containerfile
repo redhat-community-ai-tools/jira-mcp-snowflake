@@ -1,9 +1,10 @@
-FROM registry.access.redhat.com/ubi9/python-311
+FROM ghcr.io/astral-sh/uv:alpine
 
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Install Python 3.11 and required build dependencies
+RUN apk add --no-cache python3 python3-dev py3-pip build-base
 
 # Copy project files to user's home directory (no permission issues)
 COPY pyproject.toml ./
@@ -26,4 +27,4 @@ RUN uv sync --no-cache --locked
 # Expose metrics port
 EXPOSE 8000
 
-CMD ["uv", "run", "python", "mcp_server.py"]
+CMD ["uv", "run","--no-cache", "python", "mcp_server.py"]
