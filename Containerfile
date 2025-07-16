@@ -27,4 +27,4 @@ RUN uv sync --no-cache --locked
 # Expose metrics port
 EXPOSE 8000
 
-CMD ["uv", "run", "python", "mcp_server.py"]
+CMD ["uv", "run","--no-cache", "python", "mcp_server.py"]
