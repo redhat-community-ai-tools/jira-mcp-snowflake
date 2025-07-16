@@ -15,8 +15,16 @@ COPY README.md ./
 # Copy application files (needed for editable install)
 COPY ./src/ ./src/
 
+# Set permissions for OpenShift compatibility
+# OpenShift runs containers with random user IDs, so we need to ensure
+# the app directory and subdirectories are writable by the group
+RUN chgrp -R 0 /app && \
+    chmod -R g=u /app
+
 # Create cache directory with proper permissions and install dependencies
-RUN uv sync --no-cache --locked
+RUN uv sync --no-cache --locked && \
+    chgrp -R 0 /app/.venv && \
+    chmod -R g=u /app/.venv
 
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
