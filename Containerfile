@@ -1,30 +1,20 @@
 FROM registry.access.redhat.com/ubi9/python-311
 
-WORKDIR /app
-
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
-# Copy project files needed for uv sync
+# Copy project files to user's home directory (no permission issues)
 COPY pyproject.toml ./
 COPY .python-version ./
 COPY uv.lock ./
 COPY README.md ./
 # Copy application files (needed for editable install)
-COPY ./src/ ./src/
+COPY ./src/ ./
 
-# Set permissions for OpenShift compatibility
-# OpenShift runs containers with random user IDs, so we need to ensure
-# the app directory and subdirectories are writable by the group
-RUN chgrp -R 0 /app && \
-    chmod -R g=u /app
-
-# Create cache directory with proper permissions and install dependencies
-RUN uv sync --no-cache --locked && \
-    chgrp -R 0 /app/.venv && \
-    chmod -R g=u /app/.venv
+# Install dependencies - no permission changes needed
+RUN uv sync --no-cache --locked
 
 # Environment variables (set these when running the container)
 # SNOWFLAKE_BASE_URL - Snowflake API base URL (optional, defaults to Red Hat's instance)
@@ -36,4 +26,4 @@ RUN uv sync --no-cache --locked && \
 # Expose metrics port
 EXPOSE 8000
 
-CMD ["uv", "run", "python", "src/mcp_server.py"]
+CMD ["uv", "run", "python", "mcp_server.py"]
