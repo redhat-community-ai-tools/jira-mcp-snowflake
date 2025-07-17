@@ -16,6 +16,7 @@ SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL")
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
 SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
 SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE", "DEFAULT")
+INTERNAL_GATEWAY = os.environ.get("INTERNAL_GATEWAY", "false")
 
 # Snowflake token handling - for stdio transport, get from environment
 # For other transports, it will be retrieved from request context in tools layer

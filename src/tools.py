@@ -3,7 +3,7 @@ from typing import Any, Optional, Dict
 
 from mcp.server.fastmcp import FastMCP
 
-from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN
+from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY
 from database import (
     execute_snowflake_query,
     format_snowflake_row,
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def get_snowflake_token(mcp: FastMCP) -> Optional[str]:
     """Get Snowflake token from either config (stdio) or request headers (non-stdio)"""
-    if MCP_TRANSPORT == "stdio":
+    if MCP_TRANSPORT == "stdio" or INTERNAL_GATEWAY.lower() == "true":
         return SNOWFLAKE_TOKEN
     else:
         try:
