@@ -54,7 +54,6 @@ def register_tools(mcp: FastMCP) -> None:
         search_text: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        List JIRA issues from Snowflake with optional filtering.
 
         Args:
             project: Filter by project key (e.g., 'SMQE', 'OSIM')
@@ -332,6 +331,7 @@ def register_tools(mcp: FastMCP) -> None:
         project: Optional[str] = None,
         archived: Optional[str] = None,
         deleted: Optional[str] = None,
+        issue: Optional[str] = None,
         limit: int = 50,
         search_text: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -339,6 +339,7 @@ def register_tools(mcp: FastMCP) -> None:
         List JIRA components from Snowflake with optional filtering.
 
         Args:
+            issue: Filter by issue ID (e.g., 'SMQE-1280')
             project: Filter by project ID (e.g., '12325621')
             archived: Filter by archived status ('Y' or 'N')
             deleted: Filter by deleted status ('Y' or 'N')
@@ -357,17 +358,20 @@ def register_tools(mcp: FastMCP) -> None:
             # Build SQL query with filters
             sql_conditions = []
 
+            if issue:
+                sql_conditions.append(f"i.ISSUE_KEY = '{sanitize_sql_value(issue)}'")
+
             if project:
-                sql_conditions.append(f"PROJECT = '{sanitize_sql_value(project)}'")
+                sql_conditions.append(f"c.PROJECT = '{sanitize_sql_value(project)}'")
 
             if archived:
-                sql_conditions.append(f"ARCHIVED = '{sanitize_sql_value(archived.upper())}'")
+                sql_conditions.append(f"c.ARCHIVED = '{sanitize_sql_value(archived.upper())}'")
 
             if deleted:
-                sql_conditions.append(f"DELETED = '{sanitize_sql_value(deleted.upper())}'")
+                sql_conditions.append(f"c.DELETED = '{sanitize_sql_value(deleted.upper())}'")
 
             if search_text:
-                search_condition = f"(LOWER(CNAME) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"
+                search_condition = f"(LOWER(c.CNAME) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(c.DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"
                 sql_conditions.append(search_condition)
 
             where_clause = ""
@@ -376,12 +380,17 @@ def register_tools(mcp: FastMCP) -> None:
 
             sql = f"""
             SELECT
-                ID, PROJECT, CNAME, DESCRIPTION, URL, LEAD,
-                ASSIGNEETYPE, ARCHIVED, DELETED, _FIVETRAN_SYNCED
-            FROM JIRA_COMPONENT_RHAI
-            {where_clause}
-            ORDER BY CNAME ASC
-            LIMIT {limit}
+                c.ID, c.PROJECT, c.CNAME as COMPONENT_NAME, c.DESCRIPTION, c.URL, c.LEAD,
+                c.ASSIGNEETYPE, c.ARCHIVED, c.DELETED, c._FIVETRAN_SYNCED
+                FROM JIRA_DB.RHAI_MARTS.JIRA_ISSUE_NON_PII i
+                JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+                    ON i.ID = na.SOURCE_NODE_ID
+                    AND na.ASSOCIATION_TYPE = 'IssueComponent'
+                JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+                    ON na.SINK_NODE_ID = c.ID
+                {where_clause}
+                ORDER BY c.CNAME ASC
+                LIMIT {limit}
             """
 
             rows = await execute_snowflake_query(sql, snowflake_token)
@@ -390,7 +399,7 @@ def register_tools(mcp: FastMCP) -> None:
 
             # Expected column order based on SELECT statement
             columns = [
-                "ID", "PROJECT", "CNAME", "DESCRIPTION", "URL", "LEAD",
+                "ID", "PROJECT", "COMPONENT_NAME", "DESCRIPTION", "URL", "LEAD",
                 "ASSIGNEETYPE", "ARCHIVED", "DELETED", "_FIVETRAN_SYNCED"
             ]
 
@@ -401,7 +410,7 @@ def register_tools(mcp: FastMCP) -> None:
                 component = {
                     "id": row_dict.get("ID"),
                     "project": row_dict.get("PROJECT"),
-                    "name": row_dict.get("CNAME"),
+                    "name": row_dict.get("COMPONENT_NAME"),
                     "description": row_dict.get("DESCRIPTION") or "",
                     "url": row_dict.get("URL"),
                     "lead": row_dict.get("LEAD"),
@@ -418,6 +427,7 @@ def register_tools(mcp: FastMCP) -> None:
                 "total_returned": len(components),
                 "filters_applied": {
                     "project": project,
+                    "issue": issue,
                     "archived": archived,
                     "deleted": deleted,
                     "search_text": search_text,
