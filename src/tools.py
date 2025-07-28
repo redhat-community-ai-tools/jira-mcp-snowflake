@@ -79,13 +79,13 @@ def register_tools(mcp: FastMCP) -> None:
                 sql_conditions.append(f"PROJECT = '{sanitize_sql_value(project.upper())}'")
 
             if issue_type:
-                sql_conditions.append(f"ISSUETYPE = '{sanitize_sql_value(issue_type)}'")
+                sql_conditions.append(f"ISSUETYPE = {sanitize_sql_value(issue_type)}")
 
             if status:
                 sql_conditions.append(f"ISSUESTATUS = '{sanitize_sql_value(status)}'")
 
             if priority:
-                sql_conditions.append(f"PRIORITY = '{sanitize_sql_value(priority)}'")
+                sql_conditions.append(f"PRIORITY = {sanitize_sql_value(priority)}")
 
             if search_text:
                 search_condition = f"(LOWER(SUMMARY) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"

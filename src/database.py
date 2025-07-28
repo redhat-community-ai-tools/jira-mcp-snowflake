@@ -88,6 +88,9 @@ async def execute_snowflake_query(sql: str, snowflake_token: Optional[str] = Non
             "database": SNOWFLAKE_DATABASE,
             "schema": SNOWFLAKE_SCHEMA,
             "warehouse": SNOWFLAKE_WAREHOUSE,
+            "parameters": {
+                "rows_per_resultset": 0  # 0 means no maximum row limit
+            }
         }
 
         logger.info(f"Executing Snowflake query: {sql[:100]}...")  # Log first 100 chars of query
@@ -99,26 +102,54 @@ async def execute_snowflake_query(sql: str, snowflake_token: Optional[str] = Non
             logger.error("Failed to get valid response from Snowflake API")
             return []
 
-        # Parse the response to extract data
+        all_data = []
+
+        # Parse the response to extract data from first partition
         if response and "data" in response:
-            logger.info(f"Successfully got {len(response['data'])} rows from Snowflake")
+            all_data.extend(response["data"])
+
+            # Check for additional partitions
+            statement_handle = response.get("statementHandle")
+            if statement_handle:
+                # Check if there are more partitions by looking at metadata
+                metadata = response.get("resultSetMetaData", {})
+                partition_info = metadata.get("partitionInfo", [])
+
+                if len(partition_info) > 1:
+                    logger.info(f"Found {len(partition_info)} partitions, fetching remaining partitions")
+
+                    # Fetch remaining partitions (starting from partition 1)
+                    for partition_num in range(1, len(partition_info)):
+                        partition_endpoint = f"statements/{statement_handle}"
+                        partition_response = await make_snowflake_request(
+                            partition_endpoint,
+                            "GET",
+                            {"partition": partition_num},
+                            snowflake_token
+                        )
+
+                        if partition_response and "data" in partition_response:
+                            partition_data = partition_response["data"]
+                            all_data.extend(partition_data)
+                        else:
+                            logger.warning(f"Failed to fetch partition {partition_num}")
+
             success = True
-            return response["data"]
+            logger.info(f"Successfully retrieved {len(all_data)} rows from Snowflake")
+            return all_data
+
         elif response and "resultSet" in response:
             # Handle different response formats
             result_set = response["resultSet"]
             if "data" in result_set:
                 logger.info(f"Successfully got {len(result_set['data'])} rows from Snowflake (resultSet format)")
-                success = True
                 return result_set["data"]
 
-        logger.warning("No data found in Snowflake response")
-        success = True  # No data is still a successful query
+        logger.error(f"Unexpected response format from Snowflake: {response}")
         return []
 
     except Exception as e:
-        logger.error(f"Error executing Snowflake query: {str(e)}")
-        logger.error(f"Query that failed: {sql}")
+        logger.error(f"Failed to execute Snowflake query: {e}")
         return []
     finally:
         track_snowflake_query(start_time, success)
