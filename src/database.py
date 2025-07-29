@@ -49,7 +49,7 @@ async def make_snowflake_request(
     url = f"{SNOWFLAKE_BASE_URL}/{endpoint}"
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, http2=True) as client:
             if method.upper() == "GET":
                 response = await client.request(method, url, headers=headers, params=data)
             else:
@@ -102,8 +102,41 @@ async def execute_snowflake_query(sql: str, snowflake_token: Optional[str] = Non
         # Parse the response to extract data
         if response and "data" in response:
             logger.info(f"Successfully got {len(response['data'])} rows from Snowflake")
+
+            all_data = response["data"]
+
+            # Check for pagination/partitions
+            metadata = response.get('resultSetMetaData', {})
+            partition_info = metadata.get('partitionInfo', [])
+
+            if len(partition_info) > 1:
+                logger.info(f"Found {len(partition_info)} partitions, fetching remaining data...")
+
+                # Get the statement handle for pagination
+                statement_handle = response.get('statementHandle')
+                if statement_handle:
+                    # Fetch remaining partitions
+                    for partition_index in range(1, len(partition_info)):
+                        try:
+                            partition_endpoint = f"statements/{statement_handle}?partition={partition_index}"
+                            partition_response = await make_snowflake_request(
+                                partition_endpoint, "GET", None, snowflake_token
+                            )
+
+                            if partition_response and "data" in partition_response:
+                                partition_data = partition_response["data"]
+                                logger.info(f"Fetched partition {partition_index}: {len(partition_data)} rows")
+                                all_data.extend(partition_data)
+                            else:
+                                logger.warning(f"Failed to fetch partition {partition_index}")
+
+                        except Exception as e:
+                            logger.error(f"Error fetching partition {partition_index}: {e}")
+
+                logger.info(f"Total rows after fetching all partitions: {len(all_data)}")
+
             success = True
-            return response["data"]
+            return all_data
         elif response and "resultSet" in response:
             # Handle different response formats
             result_set = response["resultSet"]
@@ -155,7 +188,7 @@ async def get_issue_labels(issue_ids: List[str], snowflake_token: Optional[str] 
 
         sql = f"""
         SELECT ISSUE, LABEL
-        FROM JIRA_LABEL_RHAI
+        FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_LABEL_RHAI
         WHERE ISSUE IN ({ids_str}) AND LABEL IS NOT NULL
         """
 
@@ -201,7 +234,7 @@ async def get_issue_comments(issue_ids: List[str], snowflake_token: Optional[str
 
         sql = f"""
         SELECT ID, ISSUEID, ROLELEVEL, BODY, CREATED, UPDATED
-        FROM JIRA_COMMENT_NON_PII
+        FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_COMMENT_NON_PII
         WHERE ISSUEID IN ({ids_str}) AND BODY IS NOT NULL
         ORDER BY ISSUEID, CREATED ASC
         """
