@@ -263,3 +263,105 @@ async def get_issue_comments(issue_ids: List[str], snowflake_token: Optional[str
         logger.error(f"Error fetching comments: {str(e)}")
 
     return comments_data
+
+
+async def get_issue_links(issue_ids: List[str], snowflake_token: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Get issue links for given issue IDs from Snowflake"""
+    if not issue_ids:
+        return {}
+
+    links_data = {}
+
+    try:
+        # Sanitize and validate issue IDs (should be numeric)
+        sanitized_ids = []
+        for issue_id in issue_ids:
+            # Ensure issue IDs are numeric to prevent injection
+            if isinstance(issue_id, (str, int)) and str(issue_id).isdigit():
+                sanitized_ids.append(str(issue_id))
+
+        if not sanitized_ids:
+            return {}
+
+        # Create comma-separated list for IN clause
+        ids_str = "'" + "','".join(sanitized_ids) + "'"
+
+        sql = f"""
+        SELECT
+            il.ID as LINK_ID,
+            il.SOURCE,
+            il.DESTINATION,
+            il.SEQUENCE,
+            ilt.LINKNAME,
+            ilt.INWARD,
+            ilt.OUTWARD,
+            si.ISSUE_KEY as SOURCE_KEY,
+            di.ISSUE_KEY as DESTINATION_KEY,
+            si.SUMMARY as SOURCE_SUMMARY,
+            di.SUMMARY as DESTINATION_SUMMARY
+        FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUELINK_RHAI il
+        JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUELINKTYPE_RHAI ilt
+            ON il.LINKTYPE = ilt.ID
+        LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII si
+            ON il.SOURCE = si.ID
+        LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII di
+            ON il.DESTINATION = di.ID
+        WHERE (il.SOURCE IN ({ids_str}) OR il.DESTINATION IN ({ids_str}))
+        ORDER BY il.SOURCE, il.SEQUENCE
+        """
+
+        rows = await execute_snowflake_query(sql, snowflake_token)
+        columns = [
+            "LINK_ID", "SOURCE", "DESTINATION", "SEQUENCE", "LINKNAME",
+            "INWARD", "OUTWARD", "SOURCE_KEY", "DESTINATION_KEY",
+            "SOURCE_SUMMARY", "DESTINATION_SUMMARY"
+        ]
+
+        for row in rows:
+            row_dict = format_snowflake_row(row, columns)
+            source_id = str(row_dict.get("SOURCE"))
+            destination_id = str(row_dict.get("DESTINATION"))
+
+            # Create link object
+            link = {
+                "link_id": row_dict.get("LINK_ID"),
+                "source_id": source_id,
+                "destination_id": destination_id,
+                "sequence": row_dict.get("SEQUENCE"),
+                "link_type": row_dict.get("LINKNAME"),
+                "inward_description": row_dict.get("INWARD"),
+                "outward_description": row_dict.get("OUTWARD"),
+                "source_key": row_dict.get("SOURCE_KEY"),
+                "destination_key": row_dict.get("DESTINATION_KEY"),
+                "source_summary": row_dict.get("SOURCE_SUMMARY"),
+                "destination_summary": row_dict.get("DESTINATION_SUMMARY")
+            }
+
+            # Add to both source and destination issue data
+            for issue_id in [source_id, destination_id]:
+                if issue_id in sanitized_ids:
+                    if issue_id not in links_data:
+                        links_data[issue_id] = []
+
+                    # Determine relationship direction for this issue
+                    if issue_id == source_id:
+                        link_copy = link.copy()
+                        link_copy["relationship"] = "outward"
+                        link_copy["related_issue_id"] = destination_id
+                        link_copy["related_issue_key"] = row_dict.get("DESTINATION_KEY")
+                        link_copy["related_issue_summary"] = row_dict.get("DESTINATION_SUMMARY")
+                        link_copy["relationship_description"] = row_dict.get("OUTWARD")
+                    else:
+                        link_copy = link.copy()
+                        link_copy["relationship"] = "inward"
+                        link_copy["related_issue_id"] = source_id
+                        link_copy["related_issue_key"] = row_dict.get("SOURCE_KEY")
+                        link_copy["related_issue_summary"] = row_dict.get("SOURCE_SUMMARY")
+                        link_copy["relationship_description"] = row_dict.get("INWARD")
+
+                    links_data[issue_id].append(link_copy)
+
+    except Exception as e:
+        logger.error(f"Error fetching issue links: {str(e)}")
+
+    return links_data
