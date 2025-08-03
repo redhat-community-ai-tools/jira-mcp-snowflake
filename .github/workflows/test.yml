@@ -47,7 +47,7 @@ jobs:
     
     - name: Run tests with coverage
       run: |
-        uv add --dev pytest-cov
+        uv sync --dev
         uv run pytest tests/ --cov=src --cov-report=xml --cov-report=term -v --tb=short
     
     - name: Upload coverage to Codecov
