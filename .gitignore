@@ -2,3 +2,6 @@ Snowflake_CSV/
 .venv/
 **/*.pvc
 __pycache__/
+**/.pytest_cache
+.coverage
+coverage.xml   

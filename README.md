@@ -158,6 +158,39 @@ uv sync
 uv run python src/mcp_server.py
 ```
 
+### Using Makefile Targets
+
+For convenience, several Makefile targets are available to streamline development tasks:
+
+#### Development Setup
+```bash
+# Install dependencies including dev packages
+make uv_sync_dev
+```
+
+#### Testing and Quality Assurance
+```bash
+# Run linting (flake8)
+make lint
+
+# Run tests with coverage
+make pytest
+
+# Run both linting and tests
+make test
+```
+
+#### Building
+```bash
+# Build container image with Podman
+make build
+```
+
+**Note**: On macOS, you may need to install a newer version of make via Homebrew:
+```bash
+brew install make
+```
+
 ### Container Deployment
 
 ## Building locally
