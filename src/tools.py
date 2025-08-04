@@ -52,7 +52,8 @@ def register_tools(mcp: FastMCP) -> None:
         status: Optional[str] = None,
         priority: Optional[str] = None,
         limit: int = 50,
-        search_text: Optional[str] = None
+        search_text: Optional[str] = None,
+        timeframe: int = 30
     ) -> Dict[str, Any]:
         """
 
@@ -63,6 +64,7 @@ def register_tools(mcp: FastMCP) -> None:
             priority: Filter by priority ID
             limit: Maximum number of issues to return (default: 50)
             search_text: Search in summary and description fields
+            timeframe: Filter issues updated/created/resolved within last N days (default: 30)
 
         Returns:
             Dictionary containing issues list and metadata
@@ -91,6 +93,15 @@ def register_tools(mcp: FastMCP) -> None:
             if search_text:
                 search_condition = f"(LOWER(SUMMARY) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"
                 sql_conditions.append(search_condition)
+
+            # Add timeframe filter - check if any of the dates are within the specified timeframe
+            if timeframe > 0:
+                timeframe_condition = f"""(
+                    CREATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS' 
+                    OR UPDATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS' 
+                    OR RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
+                )"""
+                sql_conditions.append(timeframe_condition)
 
             where_clause = ""
             if sql_conditions:
@@ -171,6 +182,7 @@ def register_tools(mcp: FastMCP) -> None:
                     "status": status,
                     "priority": priority,
                     "search_text": search_text,
+                    "timeframe": timeframe,
                     "limit": limit
                 }
             }
