@@ -97,8 +97,8 @@ def register_tools(mcp: FastMCP) -> None:
             # Add timeframe filter - check if any of the dates are within the specified timeframe
             if timeframe > 0:
                 timeframe_condition = f"""(
-                    CREATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS' 
-                    OR UPDATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS' 
+                    CREATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
+                    OR UPDATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
                     OR RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
                 )"""
                 sql_conditions.append(timeframe_condition)
