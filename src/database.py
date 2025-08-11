@@ -1,6 +1,7 @@
 import json
 import time
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Any, List, Dict, Optional
 
 import httpx
@@ -157,12 +158,64 @@ async def execute_snowflake_query(sql: str, snowflake_token: Optional[str] = Non
         track_snowflake_query(start_time, success)
 
 
+def parse_snowflake_timestamp(timestamp_str: str) -> str:
+    """Parse Snowflake timestamp format and convert to ISO format"""
+    if not timestamp_str or not isinstance(timestamp_str, str):
+        return timestamp_str
+
+    try:
+        # Handle format like "1753767533.658000000 1440"
+        parts = timestamp_str.strip().split()
+        if len(parts) >= 2:
+            timestamp_part = parts[0]
+            timezone_offset_minutes = int(parts[1])
+
+            # Convert to float to handle decimal seconds
+            timestamp_float = float(timestamp_part)
+
+            # Create datetime from timestamp
+            dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
+
+            # Apply timezone offset (offset is in minutes)
+            offset_timedelta = timedelta(minutes=timezone_offset_minutes)
+            dt_with_offset = dt + offset_timedelta
+
+            # Return in ISO format
+            return dt_with_offset.isoformat()
+        else:
+            # Try parsing as simple timestamp
+            timestamp_float = float(timestamp_str)
+            dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
+            return dt.isoformat()
+
+    except (ValueError, TypeError) as e:
+        logger.debug(f"Could not parse timestamp '{timestamp_str}': {e}")
+        return timestamp_str
+
+
 def format_snowflake_row(row_data: List[Any], columns: List[str]) -> Dict[str, Any]:
     """Convert Snowflake row data to dictionary using column names"""
     if len(row_data) != len(columns):
         return {}
 
-    return {columns[i]: row_data[i] for i in range(len(columns))}
+    result = {}
+    # Date/time columns that should be parsed
+    timestamp_columns = {
+        'CREATED', 'UPDATED', 'DUEDATE', 'RESOLUTIONDATE',
+        'ARCHIVEDDATE', '_FIVETRAN_SYNCED'
+    }
+
+    for i in range(len(columns)):
+        column_name = columns[i].upper()
+        value = row_data[i]
+
+        # Parse timestamp columns
+        if column_name in timestamp_columns and value:
+            result[columns[i]] = parse_snowflake_timestamp(str(value))
+        else:
+            result[columns[i]] = value
+
+    return result
 
 
 async def get_issue_labels(issue_ids: List[str], snowflake_token: Optional[str] = None) -> Dict[str, List[str]]:
