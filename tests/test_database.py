@@ -12,6 +12,7 @@ from database import (
     make_snowflake_request,
     execute_snowflake_query,
     format_snowflake_row,
+    parse_snowflake_timestamp,
     get_issue_labels,
     get_issue_comments,
     get_issue_links
@@ -256,6 +257,98 @@ class TestExecuteSnowflakeQuery:
         mock_track.assert_called_once()
 
 
+class TestParseSnowflakeTimestamp:
+    """Test cases for parse_snowflake_timestamp function"""
+
+    def test_parse_timestamp_with_offset(self):
+        """Test parsing timestamp with timezone offset"""
+        # Test with actual KONFLUX-9430 timestamp
+        timestamp_str = "1753767533.658000000 1440"
+        result = parse_snowflake_timestamp(timestamp_str)
+        
+        # Should convert to ISO format with timezone offset applied
+        assert result == "2025-07-30T05:38:53.658000+00:00"
+
+    def test_parse_timestamp_different_offsets(self):
+        """Test parsing timestamps with different timezone offsets"""
+        test_cases = [
+            ("1753767533.658000000 1440", "2025-07-30T05:38:53.658000+00:00"),  # +24 hours
+            ("1753767533.658000000 0", "2025-07-29T05:38:53.658000+00:00"),     # no offset
+            ("1753767533.658000000 -300", "2025-07-29T00:38:53.658000+00:00"),  # -5 hours
+        ]
+        
+        for input_timestamp, expected_output in test_cases:
+            result = parse_snowflake_timestamp(input_timestamp)
+            assert result == expected_output
+
+    def test_parse_timestamp_without_offset(self):
+        """Test parsing timestamp without timezone offset"""
+        timestamp_str = "1753767533.658000000"
+        result = parse_snowflake_timestamp(timestamp_str)
+        
+        # Should convert to UTC ISO format
+        assert result == "2025-07-29T05:38:53.658000+00:00"
+
+    def test_parse_timestamp_integer_seconds(self):
+        """Test parsing timestamp with integer seconds"""
+        timestamp_str = "1753767533 1440"
+        result = parse_snowflake_timestamp(timestamp_str)
+        
+        # Should handle integer timestamps
+        assert result == "2025-07-30T05:38:53+00:00"
+
+    def test_parse_timestamp_none_input(self):
+        """Test parsing None input"""
+        result = parse_snowflake_timestamp(None)
+        assert result is None
+
+    def test_parse_timestamp_empty_string(self):
+        """Test parsing empty string"""
+        result = parse_snowflake_timestamp("")
+        assert result == ""
+
+    def test_parse_timestamp_non_string_input(self):
+        """Test parsing non-string input"""
+        result = parse_snowflake_timestamp(123)
+        assert result == 123
+
+    def test_parse_timestamp_invalid_format(self):
+        """Test parsing invalid timestamp format"""
+        invalid_timestamps = [
+            "invalid_timestamp",
+            "1753767533.658000000 invalid_offset",
+            "not_a_number 1440",
+        ]
+        
+        for invalid_ts in invalid_timestamps:
+            result = parse_snowflake_timestamp(invalid_ts)
+            # Should return original string if parsing fails
+            assert result == invalid_ts
+
+    def test_parse_timestamp_with_extra_data(self):
+        """Test parsing timestamp with extra data - should still parse the valid parts"""
+        timestamp_str = "1753767533.658000000 1440 extra_data"
+        result = parse_snowflake_timestamp(timestamp_str)
+        
+        # Function should parse the first two parts and ignore extra data
+        assert result == "2025-07-30T05:38:53.658000+00:00"
+
+    def test_parse_timestamp_edge_cases(self):
+        """Test parsing edge case timestamps"""
+        test_cases = [
+            # Very large offset
+            ("1753767533.658000000 43200", "2025-08-28T05:38:53.658000+00:00"),  # +30 days
+            # Negative large offset  
+            ("1753767533.658000000 -43200", "2025-06-29T05:38:53.658000+00:00"), # -30 days
+            # Zero timestamp
+            ("0.0 0", "1970-01-01T00:00:00+00:00"),
+        ]
+        
+        for input_timestamp, expected_output in test_cases:
+            result = parse_snowflake_timestamp(input_timestamp)
+            assert result == expected_output
+
+
 class TestFormatSnowflakeRow:
     """Test cases for format_snowflake_row function"""
 
@@ -286,6 +379,61 @@ class TestFormatSnowflakeRow:
         result = format_snowflake_row(row_data, columns)
         
         assert result == {}
+
+    def test_format_with_timestamp_columns(self):
+        """Test formatting with timestamp columns that should be parsed"""
+        row_data = ["123", "1753767533.658000000 1440", "1753824211.261000000 1440", "regular_value"]
+        columns = ["ID", "CREATED", "RESOLUTIONDATE", "SUMMARY"]
+        
+        result = format_snowflake_row(row_data, columns)
+        
+        expected = {
+            "ID": "123",
+            "CREATED": "2025-07-30T05:38:53.658000+00:00",
+            "RESOLUTIONDATE": "2025-07-30T21:23:31.261000+00:00", 
+            "SUMMARY": "regular_value"
+        }
+        assert result == expected
+
+    def test_format_with_non_timestamp_columns(self):
+        """Test formatting with non-timestamp columns that should not be parsed"""
+        row_data = ["123", "1753767533.658000000 1440", "some_description"]
+        columns = ["ID", "SOME_NUMBER", "DESCRIPTION"]  # SOME_NUMBER is not a recognized timestamp column
+        
+        result = format_snowflake_row(row_data, columns)
+        
+        expected = {
+            "ID": "123",
+            "SOME_NUMBER": "1753767533.658000000 1440",  # Should not be parsed
+            "DESCRIPTION": "some_description"
+        }
+        assert result == expected
+
+    def test_format_with_null_timestamp_values(self):
+        """Test formatting with null timestamp values"""
+        row_data = ["123", None, "", "value"]
+        columns = ["ID", "CREATED", "UPDATED", "SUMMARY"]
+        
+        result = format_snowflake_row(row_data, columns)
+        
+        expected = {
+            "ID": "123",
+            "CREATED": None,  # None should remain None
+            "UPDATED": "",    # Empty string should remain empty
+            "SUMMARY": "value"
+        }
+        assert result == expected
+
+    def test_format_case_insensitive_timestamp_columns(self):
+        """Test that timestamp column detection is case insensitive"""
+        row_data = ["123", "1753767533.658000000 1440", "1753824211.261000000 1440"]
+        columns = ["id", "created", "Updated"]  # Mixed case
+        
+        result = format_snowflake_row(row_data, columns)
+        
+        # Should still parse timestamps regardless of case
+        assert "2025-07-30T05:38:53.658000+00:00" in result["created"]
+        assert "2025-07-30T21:23:31.261000+00:00" in result["Updated"]
 
 
 class TestGetIssueLabels:
