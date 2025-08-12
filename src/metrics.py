@@ -43,6 +43,28 @@ if ENABLE_METRICS and PROMETHEUS_AVAILABLE:
         'Duration of Snowflake queries in seconds'
     )
 
+    cache_operations_total = Counter(
+        'mcp_cache_operations_total',
+        'Total number of cache operations',
+        ['operation', 'result']
+    )
+
+    cache_hit_ratio = Gauge(
+        'mcp_cache_hit_ratio',
+        'Cache hit ratio percentage'
+    )
+
+    concurrent_operations_total = Counter(
+        'mcp_concurrent_operations_total',
+        'Total number of concurrent operations executed',
+        ['operation_type']
+    )
+
+    http_connections_active = Gauge(
+        'mcp_http_connections_active',
+        'Number of active HTTP connections in the pool'
+    )
+
     logger.info(f"Prometheus metrics enabled on port {METRICS_PORT}")
 elif ENABLE_METRICS and not PROMETHEUS_AVAILABLE:
     logger.warning("Metrics enabled but prometheus_client not available. Install with: pip install prometheus_client")
@@ -90,6 +112,32 @@ def set_active_connections(count: int) -> None:
     """Set the number of active connections"""
     if ENABLE_METRICS and PROMETHEUS_AVAILABLE:
         active_connections.set(count)
+
+
+def track_cache_operation(operation: str, hit: bool) -> None:
+    """Track cache operations"""
+    if ENABLE_METRICS and PROMETHEUS_AVAILABLE:
+        result = 'hit' if hit else 'miss'
+        cache_operations_total.labels(operation=operation, result=result).inc()
+
+
+def update_cache_hit_ratio(hits: int, total: int) -> None:
+    """Update cache hit ratio"""
+    if ENABLE_METRICS and PROMETHEUS_AVAILABLE and total > 0:
+        ratio = (hits / total) * 100
+        cache_hit_ratio.set(ratio)
+
+
+def track_concurrent_operation(operation_type: str) -> None:
+    """Track concurrent operations"""
+    if ENABLE_METRICS and PROMETHEUS_AVAILABLE:
+        concurrent_operations_total.labels(operation_type=operation_type).inc()
+
+
+def set_http_connections_active(count: int) -> None:
+    """Set the number of active HTTP connections"""
+    if ENABLE_METRICS and PROMETHEUS_AVAILABLE:
+        http_connections_active.set(count)
 
 
 class MetricsHandler(http.server.BaseHTTPRequestHandler):

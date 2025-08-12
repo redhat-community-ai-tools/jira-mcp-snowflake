@@ -8,11 +8,10 @@ from database import (
     execute_snowflake_query,
     format_snowflake_row,
     sanitize_sql_value,
-    get_issue_labels,
-    get_issue_comments,
-    get_issue_links
+    get_issue_links,
+    get_issue_enrichment_data_concurrent
 )
-from metrics import track_tool_usage
+from metrics import track_tool_usage, track_concurrent_operation
 
 logger = logging.getLogger(__name__)
 
@@ -163,15 +162,19 @@ def register_tools(mcp: FastMCP) -> None:
                 if row_dict.get("ID"):
                     issue_ids.append(str(row_dict.get("ID")))
 
-            # Get labels and links for enrichment
-            labels_data = await get_issue_labels(issue_ids, snowflake_token)
-            links_data = await get_issue_links(issue_ids, snowflake_token)
+            # Get labels, comments, and links concurrently for better performance
+            track_concurrent_operation("issue_enrichment")
+            labels_data, comments_data, links_data = await get_issue_enrichment_data_concurrent(
+                issue_ids, snowflake_token
+            )
 
             # Enrich issues with labels and links
             for issue in issues:
                 issue_id = str(issue['id'])
                 issue['labels'] = labels_data.get(issue_id, [])
                 issue['links'] = links_data.get(issue_id, [])
+                # Don't add comments to list view to keep it lightweight
+                # Comments are only added in the detailed view
 
             return {
                 "issues": issues,
@@ -265,17 +268,16 @@ def register_tools(mcp: FastMCP) -> None:
                 "archived_date": row_dict.get("ARCHIVEDDATE")
             }
 
-            # Get labels for this issue
-            labels_data = await get_issue_labels([str(issue['id'])], snowflake_token)
-            issue['labels'] = labels_data.get(str(issue['id']), [])
+            # Get labels, comments, and links concurrently for this issue
+            track_concurrent_operation("single_issue_enrichment")
+            labels_data, comments_data, links_data = await get_issue_enrichment_data_concurrent(
+                [str(issue['id'])], snowflake_token
+            )
 
-            # Get comments for this issue
-            comments_data = await get_issue_comments([str(issue['id'])], snowflake_token)
-            issue['comments'] = comments_data.get(str(issue['id']), [])
-
-            # Get issue links for this issue
-            links_data = await get_issue_links([str(issue['id'])], snowflake_token)
-            issue['links'] = links_data.get(str(issue['id']), [])
+            issue_id = str(issue['id'])
+            issue['labels'] = labels_data.get(issue_id, [])
+            issue['comments'] = comments_data.get(issue_id, [])
+            issue['links'] = links_data.get(issue_id, [])
 
             return issue
 

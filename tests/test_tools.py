@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, call
 from typing import Dict, Any
 
 import sys
@@ -110,26 +110,20 @@ class TestRegisterTools:
         """Mock all external dependencies"""
         with patch('tools.get_snowflake_token') as mock_token, \
              patch('tools.execute_snowflake_query') as mock_query, \
-             patch('tools.get_issue_labels') as mock_labels, \
-             patch('tools.get_issue_comments') as mock_comments, \
-             patch('tools.get_issue_links') as mock_links, \
+             patch('tools.get_issue_enrichment_data_concurrent') as mock_enrichment, \
              patch('tools.format_snowflake_row') as mock_format, \
              patch('tools.sanitize_sql_value') as mock_sanitize:
             
             mock_token.return_value = 'test_token'
             mock_query.return_value = []
-            mock_labels.return_value = {}
-            mock_comments.return_value = {}
-            mock_links.return_value = {}
+            mock_enrichment.return_value = ({}, {}, {})  # labels, comments, links
             mock_format.return_value = {}
             mock_sanitize.side_effect = lambda x: str(x).replace("'", "''")
             
             yield {
                 'token': mock_token,
                 'query': mock_query,
-                'labels': mock_labels,
-                'comments': mock_comments,
-                'links': mock_links,
+                'enrichment': mock_enrichment,
                 'format': mock_format,
                 'sanitize': mock_sanitize
             }
@@ -172,8 +166,11 @@ class TestRegisterTools:
             'ENVIRONMENT': None, 'COMPONENT': None, 'FIXFOR': None
         }
         
-        mock_dependencies['labels'].return_value = {'123': ['label1', 'label2']}
-        mock_dependencies['links'].return_value = {'123': [{'link_id': '456'}]}
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['label1', 'label2']},  # labels
+            {'123': [{'id': 'c1', 'body': 'comment'}]},  # comments  
+            {'123': [{'link_id': '456'}]}  # links
+        )
         
         register_tools(mock_mcp)
         list_jira_issues = mock_mcp._registered_tools[0]
@@ -251,9 +248,11 @@ class TestRegisterTools:
             'SECURITY': None, 'ARCHIVED': 'N', 'ARCHIVEDDATE': None
         }
         
-        mock_dependencies['labels'].return_value = {'123': ['label1']}
-        mock_dependencies['comments'].return_value = {'123': [{'id': '789', 'body': 'Comment'}]}
-        mock_dependencies['links'].return_value = {'123': [{'link_id': '456'}]}
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['label1']},  # labels
+            {'123': [{'id': '789', 'body': 'Comment'}]},  # comments
+            {'123': [{'link_id': '456'}]}  # links
+        )
         
         register_tools(mock_mcp)
         get_jira_issue_details = mock_mcp._registered_tools[1]
@@ -317,11 +316,13 @@ class TestRegisterTools:
         assert result['filters_applied']['project'] == 'proj1'
 
     @pytest.mark.asyncio
-    async def test_get_jira_issue_links_success(self, mock_mcp, mock_dependencies):
+    @patch('tools.get_issue_links')
+    async def test_get_jira_issue_links_success(self, mock_get_links, mock_mcp, mock_dependencies):
         """Test successful get_jira_issue_links execution"""
         # First query returns issue ID
         mock_dependencies['query'].return_value = [['123']]
-        mock_dependencies['links'].return_value = {'123': [{'link_id': '456', 'type': 'blocks'}]}
+        # Mock get_issue_links function directly since this tool uses it directly
+        mock_get_links.return_value = {'123': [{'link_id': '456', 'type': 'blocks'}]}
         
         register_tools(mock_mcp)
         get_jira_issue_links = mock_mcp._registered_tools[4]
@@ -427,3 +428,193 @@ class TestRegisterTools:
         
         # Verify filters_applied includes large timeframe
         assert result['filters_applied']['timeframe'] == 365
+
+
+class TestConcurrentProcessingIntegration:
+    """Test cases for concurrent processing integration in tools"""
+
+    @pytest.fixture
+    def mock_mcp_with_concurrent(self):
+        """Mock MCP server with concurrent processing mocks"""
+        mcp = MagicMock()
+        mcp._registered_tools = []
+
+        def mock_tool(func=None):
+            def decorator(f):
+                mcp._registered_tools.append(f)
+                return f
+            return decorator(func) if func else decorator
+
+        mcp.tool = mock_tool
+        return mcp
+
+    @pytest.fixture
+    def mock_concurrent_dependencies(self):
+        """Mock dependencies for concurrent processing tests"""
+        with patch('tools.get_snowflake_token') as mock_token, \
+             patch('tools.execute_snowflake_query') as mock_query, \
+             patch('tools.get_issue_enrichment_data_concurrent') as mock_concurrent, \
+             patch('tools.track_concurrent_operation') as mock_track, \
+             patch('tools.format_snowflake_row') as mock_format:
+            
+            mock_token.return_value = 'test_token'
+            # Set default format return value
+            mock_format.return_value = {
+                'ID': '123', 'ISSUE_KEY': 'TEST-1', 'PROJECT': 'PROJECT', 'ISSUENUM': '1',
+                'ISSUETYPE': 'Bug', 'SUMMARY': 'Test issue', 'DESCRIPTION_TRUNCATED': 'Short desc',
+                'DESCRIPTION': 'Full description', 'PRIORITY': 'High', 'ISSUESTATUS': 'Open',
+                'RESOLUTION': None, 'CREATED': '2024-01-01', 'UPDATED': '2024-01-02',
+                'DUEDATE': None, 'RESOLUTIONDATE': None, 'VOTES': 0, 'WATCHES': 0,
+                'ENVIRONMENT': 'test', 'COMPONENT': 'comp', 'FIXFOR': 'v1.0'
+            }
+            yield {
+                'token': mock_token,
+                'query': mock_query,
+                'concurrent': mock_concurrent,
+                'track': mock_track,
+                'format': mock_format
+            }
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_uses_concurrent_processing(self, mock_mcp_with_concurrent, mock_concurrent_dependencies):
+        """Test that list_jira_issues uses concurrent processing for enrichment"""
+        # Setup mocks
+        mock_concurrent_dependencies['query'].return_value = [
+            ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Short desc", "Full description",
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0"]
+        ]
+        
+        mock_concurrent_dependencies['concurrent'].return_value = (
+            {"123": ["bug", "urgent"]},  # labels
+            {"123": [{"id": "c1", "body": "comment"}]},  # comments
+            {"123": [{"id": "l1", "type": "blocks"}]}  # links
+        )
+        
+        register_tools(mock_mcp_with_concurrent)
+        list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]
+        
+        # Execute the function
+        result = await list_jira_issues(project="TEST")
+        
+        # Verify concurrent processing was used
+        mock_concurrent_dependencies['concurrent'].assert_called_once()
+        mock_concurrent_dependencies['track'].assert_called_with("issue_enrichment")
+        
+        # Verify enrichment data was added to issues
+        assert len(result['issues']) == 1
+        issue = result['issues'][0]
+        assert issue['labels'] == ["bug", "urgent"]
+        assert issue['links'] == [{"id": "l1", "type": "blocks"}]
+        # Comments should not be included in list view
+        assert 'comments' not in issue or issue.get('comments') == []
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issue_details_uses_concurrent_processing(self, mock_mcp_with_concurrent, mock_concurrent_dependencies):
+        """Test that get_jira_issue_details uses concurrent processing"""
+        # Setup mocks
+        mock_concurrent_dependencies['query'].return_value = [
+            ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Full description",
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
+             "8h", "4h", "2h", "workflow1", None, False, None]
+        ]
+        
+        mock_concurrent_dependencies['concurrent'].return_value = (
+            {"123": ["bug", "urgent"]},  # labels
+            {"123": [{"id": "c1", "body": "Test comment", "created": "2024-01-01"}]},  # comments
+            {"123": [{"id": "l1", "type": "blocks"}]}  # links
+        )
+        
+        register_tools(mock_mcp_with_concurrent)
+        get_jira_issue_details = mock_mcp_with_concurrent._registered_tools[1]
+        
+        # Execute the function
+        result = await get_jira_issue_details("TEST-1")
+        
+        # Verify concurrent processing was used
+        mock_concurrent_dependencies['concurrent'].assert_called_once()
+        mock_concurrent_dependencies['track'].assert_called_with("single_issue_enrichment")
+        
+        # Verify all enrichment data was added
+        assert result['labels'] == ["bug", "urgent"]
+        assert result['comments'] == [{"id": "c1", "body": "Test comment", "created": "2024-01-01"}]
+        assert result['links'] == [{"id": "l1", "type": "blocks"}]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_processing_handles_exceptions(self, mock_mcp_with_concurrent, mock_concurrent_dependencies):
+        """Test that concurrent processing handles exceptions gracefully"""
+        # Setup mocks - concurrent processing fails
+        mock_concurrent_dependencies['query'].return_value = [
+            ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Short desc", "Full description",
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0"]
+        ]
+        
+        # Mock concurrent processing to return empty data (simulating exception handling)
+        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {})
+        
+        register_tools(mock_mcp_with_concurrent)
+        list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]
+        
+        # Execute the function - should not raise exception
+        result = await list_jira_issues(project="TEST")
+        
+        # Should still return the basic issue data
+        assert len(result['issues']) == 1
+        issue = result['issues'][0]
+        assert issue['key'] == "TEST-1"
+        # Enrichment data should be empty due to exception
+        assert issue.get('labels', []) == []
+        assert issue.get('links', []) == []
+
+    @pytest.mark.asyncio
+    async def test_concurrent_processing_with_empty_results(self, mock_mcp_with_concurrent, mock_concurrent_dependencies):
+        """Test concurrent processing with empty enrichment results"""
+        # Setup mocks
+        mock_concurrent_dependencies['query'].return_value = [
+            ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Short desc", "Full description",
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0"]
+        ]
+        
+        # Mock concurrent processing returns empty results
+        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {})
+        
+        register_tools(mock_mcp_with_concurrent)
+        list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]
+        
+        # Execute the function
+        result = await list_jira_issues(project="TEST")
+        
+        # Verify enrichment data is empty but structure is preserved
+        assert len(result['issues']) == 1
+        issue = result['issues'][0]
+        assert issue['labels'] == []
+        assert issue['links'] == []
+
+    @pytest.mark.asyncio
+    async def test_concurrent_operation_tracking(self, mock_mcp_with_concurrent, mock_concurrent_dependencies):
+        """Test that concurrent operations are properly tracked"""
+        # Setup mocks
+        mock_concurrent_dependencies['query'].return_value = []
+        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {})
+        
+        register_tools(mock_mcp_with_concurrent)
+        list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]
+        get_jira_issue_details = mock_mcp_with_concurrent._registered_tools[1]
+        
+        # Execute both functions
+        await list_jira_issues(project="TEST")
+        
+        # Mock issue details query
+        mock_concurrent_dependencies['query'].return_value = [
+            ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Full description",
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
+             "8h", "4h", "2h", "workflow1", None, False, None]
+        ]
+        
+        await get_jira_issue_details("TEST-1")
+        
+        # Verify tracking was called for both operation types
+        expected_calls = [
+            call("issue_enrichment"),
+            call("single_issue_enrichment")
+        ]
+        mock_concurrent_dependencies['track'].assert_has_calls(expected_calls)

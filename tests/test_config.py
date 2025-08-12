@@ -184,6 +184,16 @@ class TestConfig:
         assert hasattr(config, 'ENABLE_METRICS')
         assert hasattr(config, 'METRICS_PORT')
         assert hasattr(config, 'PROMETHEUS_AVAILABLE')
+        
+        # Performance configuration
+        assert hasattr(config, 'ENABLE_CACHING')
+        assert hasattr(config, 'CACHE_TTL_SECONDS')
+        assert hasattr(config, 'CACHE_MAX_SIZE')
+        assert hasattr(config, 'MAX_HTTP_CONNECTIONS')
+        assert hasattr(config, 'HTTP_TIMEOUT_SECONDS')
+        assert hasattr(config, 'THREAD_POOL_WORKERS')
+        assert hasattr(config, 'RATE_LIMIT_PER_SECOND')
+        assert hasattr(config, 'CONCURRENT_QUERY_BATCH_SIZE')
 
     def test_prometheus_import_error(self):
         """Test handling when prometheus_client import fails"""
@@ -207,3 +217,115 @@ class TestConfig:
             # Restore the module if it was there
             if prometheus_module is not None:
                 sys.modules['prometheus_client'] = prometheus_module
+
+
+class TestPerformanceConfig:
+    """Test cases for performance configuration"""
+
+    @patch.dict('os.environ', {
+        'ENABLE_CACHING': 'false',
+        'CACHE_TTL_SECONDS': '600',
+        'CACHE_MAX_SIZE': '2000',
+        'MAX_HTTP_CONNECTIONS': '50',
+        'HTTP_TIMEOUT_SECONDS': '120',
+        'THREAD_POOL_WORKERS': '20',
+        'RATE_LIMIT_PER_SECOND': '100',
+        'CONCURRENT_QUERY_BATCH_SIZE': '10'
+    })
+    def test_performance_config_from_environment(self):
+        """Test performance configuration loading from environment variables"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.ENABLE_CACHING is False
+        assert config.CACHE_TTL_SECONDS == 600
+        assert config.CACHE_MAX_SIZE == 2000
+        assert config.MAX_HTTP_CONNECTIONS == 50
+        assert config.HTTP_TIMEOUT_SECONDS == 120
+        assert config.THREAD_POOL_WORKERS == 20
+        assert config.RATE_LIMIT_PER_SECOND == 100
+        assert config.CONCURRENT_QUERY_BATCH_SIZE == 10
+
+    @patch.dict('os.environ', {}, clear=True)
+    def test_performance_config_defaults(self):
+        """Test performance configuration defaults"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.ENABLE_CACHING is True  # Default enabled
+        assert config.CACHE_TTL_SECONDS == 300  # 5 minutes
+        assert config.CACHE_MAX_SIZE == 1000
+        assert config.MAX_HTTP_CONNECTIONS == 20
+        assert config.HTTP_TIMEOUT_SECONDS == 60
+        assert config.THREAD_POOL_WORKERS == 10
+        assert config.RATE_LIMIT_PER_SECOND == 50
+        assert config.CONCURRENT_QUERY_BATCH_SIZE == 5
+
+    @patch.dict('os.environ', {'ENABLE_CACHING': 'TRUE'})
+    def test_caching_enabled_case_insensitive(self):
+        """Test that caching configuration is case insensitive"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.ENABLE_CACHING is True
+
+    @patch.dict('os.environ', {'ENABLE_CACHING': 'no'})
+    def test_caching_non_true_value(self):
+        """Test that non-'true' values disable caching"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.ENABLE_CACHING is False
+
+    @patch.dict('os.environ', {'CACHE_TTL_SECONDS': 'not_a_number'})
+    def test_invalid_cache_ttl(self):
+        """Test handling of invalid cache TTL"""
+        import importlib
+        
+        with pytest.raises(ValueError):
+            import config
+            importlib.reload(config)
+
+    @patch.dict('os.environ', {'MAX_HTTP_CONNECTIONS': 'not_a_number'})
+    def test_invalid_max_connections(self):
+        """Test handling of invalid max connections"""
+        import importlib
+        
+        with pytest.raises(ValueError):
+            import config
+            importlib.reload(config)
+
+    @patch.dict('os.environ', {'THREAD_POOL_WORKERS': '0'})
+    def test_zero_thread_pool_workers(self):
+        """Test that zero thread pool workers is allowed"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.THREAD_POOL_WORKERS == 0
+
+    @patch.dict('os.environ', {'RATE_LIMIT_PER_SECOND': '-1'})
+    def test_negative_rate_limit(self):
+        """Test that negative rate limit is converted"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.RATE_LIMIT_PER_SECOND == -1  # Should be allowed for unlimited
+
+    @patch.dict('os.environ', {
+        'CACHE_MAX_SIZE': '5000',
+        'CONCURRENT_QUERY_BATCH_SIZE': '1'
+    })
+    def test_edge_case_values(self):
+        """Test edge case configuration values"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.CACHE_MAX_SIZE == 5000
+        assert config.CONCURRENT_QUERY_BATCH_SIZE == 1
