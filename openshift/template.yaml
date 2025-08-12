@@ -35,7 +35,7 @@ objects:
     name: jira-mcp-snowflake
   spec:
     progressDeadlineSeconds: 600
-    replicas: 1
+    replicas: 3
     revisionHistoryLimit: 10
     selector:
       matchLabels:
@@ -123,6 +123,8 @@ objects:
     annotations:
       cert-manager.io/issuer-kind: ClusterIssuer
       cert-manager.io/issuer-name: ${CERT_MANAGER_ISSUER_NAME}
+      haproxy.router.openshift.io/balance: source
+      haproxy.router.openshift.io/cookie_name: JIRA_MCP_SESSION
     name: jira-mcp-snowflake
     labels:
       app: jira-mcp-snowflake
