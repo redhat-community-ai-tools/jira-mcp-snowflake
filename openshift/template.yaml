@@ -35,7 +35,7 @@ objects:
     name: jira-mcp-snowflake
   spec:
     progressDeadlineSeconds: 600
-    replicas: 1
+    replicas: 3
     revisionHistoryLimit: 10
     selector:
       matchLabels:
