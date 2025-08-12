@@ -30,6 +30,16 @@ else:
 ENABLE_METRICS = os.environ.get("ENABLE_METRICS", "false").lower() == "true"
 METRICS_PORT = int(os.environ.get("METRICS_PORT", "8000"))
 
+# Performance configuration
+ENABLE_CACHING = os.environ.get("ENABLE_CACHING", "true").lower() == "true"
+CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "300"))  # 5 minutes
+CACHE_MAX_SIZE = int(os.environ.get("CACHE_MAX_SIZE", "1000"))
+MAX_HTTP_CONNECTIONS = int(os.environ.get("MAX_HTTP_CONNECTIONS", "20"))
+HTTP_TIMEOUT_SECONDS = int(os.environ.get("HTTP_TIMEOUT_SECONDS", "60"))
+THREAD_POOL_WORKERS = int(os.environ.get("THREAD_POOL_WORKERS", "10"))
+RATE_LIMIT_PER_SECOND = int(os.environ.get("RATE_LIMIT_PER_SECOND", "50"))
+CONCURRENT_QUERY_BATCH_SIZE = int(os.environ.get("CONCURRENT_QUERY_BATCH_SIZE", "5"))
+
 # Check if Prometheus is available
 try:
     # These imports are used in metrics.py

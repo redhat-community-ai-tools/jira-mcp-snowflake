@@ -5,7 +5,7 @@ import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../src'))
 
-from mcp_server import main
+from mcp_server import main, async_cleanup
 
 
 class TestMCPServer:
@@ -211,3 +211,155 @@ class TestMCPServer:
         
         # Verify run was called last (before cleanup)
         mock_mcp_instance.run.assert_called_once()
+
+
+class TestAsyncCleanup:
+    """Test cases for async cleanup functionality"""
+
+    @pytest.mark.asyncio
+    @patch('mcp_server.cleanup_resources')
+    async def test_async_cleanup_success(self, mock_cleanup):
+        """Test successful async cleanup"""
+        mock_cleanup.return_value = None  # Async function returns None
+        
+        # Should not raise any exceptions
+        await async_cleanup()
+        
+        # Verify cleanup_resources was called
+        mock_cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch('mcp_server.cleanup_resources')
+    @patch('mcp_server.logger')
+    async def test_async_cleanup_with_exception(self, mock_logger, mock_cleanup):
+        """Test async cleanup when cleanup_resources raises exception"""
+        mock_cleanup.side_effect = Exception("Cleanup error")
+        
+        # Should not raise exception (should be caught and logged)
+        await async_cleanup()
+        
+        # Verify cleanup was attempted and error was logged
+        mock_cleanup.assert_called_once()
+        mock_logger.error.assert_called_once()
+        
+        # Check that the error message contains the exception details
+        error_call = mock_logger.error.call_args[0][0]
+        assert "Error during cleanup" in error_call
+
+
+class TestMainWithCleanup:
+    """Test cases for main function with new cleanup functionality"""
+
+    @patch('mcp_server.set_active_connections')
+    @patch('mcp_server.start_metrics_thread')
+    @patch('mcp_server.register_tools')
+    @patch('mcp_server.FastMCP')
+    @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('asyncio.run')
+    def test_main_calls_async_cleanup_on_success(self, mock_asyncio_run, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections):
+        """Test main function calls async cleanup on successful exit"""
+        mock_mcp_instance = MagicMock()
+        mock_fastmcp.return_value = mock_mcp_instance
+        
+        main()
+        
+        # Verify asyncio.run was called for cleanup
+        mock_asyncio_run.assert_called_once()
+        
+        # Verify set_active_connections was called with 0
+        mock_set_connections.assert_called_with(0)
+
+    @patch('mcp_server.set_active_connections')
+    @patch('mcp_server.start_metrics_thread') 
+    @patch('mcp_server.register_tools')
+    @patch('mcp_server.FastMCP')
+    @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('asyncio.run')
+    def test_main_calls_async_cleanup_on_keyboard_interrupt(self, mock_asyncio_run, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections):
+        """Test main function calls async cleanup on KeyboardInterrupt"""
+        mock_mcp_instance = MagicMock()
+        mock_mcp_instance.run.side_effect = KeyboardInterrupt()
+        mock_fastmcp.return_value = mock_mcp_instance
+        
+        main()
+        
+        # Verify asyncio.run was called for cleanup even after KeyboardInterrupt
+        mock_asyncio_run.assert_called_once()
+        mock_set_connections.assert_called_with(0)
+
+    @patch('mcp_server.set_active_connections')
+    @patch('mcp_server.start_metrics_thread')
+    @patch('mcp_server.register_tools')
+    @patch('mcp_server.FastMCP')
+    @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('asyncio.run')
+    @patch('mcp_server.logger')
+    def test_main_handles_cleanup_exception(self, mock_logger, mock_asyncio_run, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections):
+        """Test main function handles cleanup exceptions gracefully"""
+        mock_mcp_instance = MagicMock()
+        mock_fastmcp.return_value = mock_mcp_instance
+        
+        # Make cleanup raise an exception
+        mock_asyncio_run.side_effect = Exception("Cleanup failed")
+        
+        main()
+        
+        # Verify error was logged
+        mock_logger.error.assert_called()
+        error_call = mock_logger.error.call_args[0][0]
+        assert "Error during cleanup" in error_call
+
+    @patch('mcp_server.set_active_connections')
+    @patch('mcp_server.start_metrics_thread')
+    @patch('mcp_server.register_tools')
+    @patch('mcp_server.FastMCP')
+    @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('asyncio.run')
+    def test_main_calls_cleanup_on_generic_exception(self, mock_asyncio_run, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections):
+        """Test main function calls cleanup even when run() raises generic exception"""
+        mock_mcp_instance = MagicMock()
+        mock_mcp_instance.run.side_effect = RuntimeError("Server error")
+        mock_fastmcp.return_value = mock_mcp_instance
+        
+        # Should re-raise the original exception
+        with pytest.raises(RuntimeError, match="Server error"):
+            main()
+        
+        # But should still call cleanup
+        mock_asyncio_run.assert_called_once()
+        mock_set_connections.assert_called_with(0)
+
+
+class TestMainIntegration:
+    """Integration tests for main function with all new functionality"""
+
+    @patch('mcp_server.cleanup_resources')
+    @patch('mcp_server.set_active_connections')
+    @patch('mcp_server.start_metrics_thread')
+    @patch('mcp_server.register_tools')
+    @patch('mcp_server.FastMCP')
+    @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('mcp_server.logger')
+    def test_main_complete_lifecycle(self, mock_logger, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections, mock_cleanup):
+        """Test complete main function lifecycle with all components"""
+        mock_mcp_instance = MagicMock()
+        mock_fastmcp.return_value = mock_mcp_instance
+        
+        main()
+        
+        # Verify initialization sequence
+        mock_fastmcp.assert_called_once_with("jira-mcp-snowflake")
+        mock_register_tools.assert_called_once_with(mock_mcp_instance)
+        mock_start_metrics.assert_called_once()
+        
+        # Verify server run
+        mock_mcp_instance.run.assert_called_once_with(transport='stdio')
+        
+        # Verify cleanup sequence
+        mock_set_connections.assert_called_with(0)
+        mock_cleanup.assert_called_once()
+        
+        # Verify logging
+        info_calls = [call[0][0] for call in mock_logger.info.call_args_list]
+        assert any("Starting JIRA MCP Server" in call for call in info_calls)
+        assert any("shutdown complete" in call for call in info_calls)

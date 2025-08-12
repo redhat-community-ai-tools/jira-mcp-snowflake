@@ -474,3 +474,172 @@ class TestDecoratorFunctionality:
             
             # Basic functionality test - functions should work regardless of metrics
             # Detailed metrics testing is complex due to conditional imports
+
+
+class TestNewPerformanceMetrics:
+    """Test cases for new performance metrics"""
+
+    @pytest.fixture
+    def mock_new_metrics(self):
+        """Mock new performance metrics objects"""
+        with patch('metrics.ENABLE_METRICS', True), \
+             patch('metrics.PROMETHEUS_AVAILABLE', True):
+            
+            # Mock the new metrics objects
+            mock_cache_ops = MagicMock()
+            mock_cache_ratio = MagicMock()
+            mock_concurrent_ops = MagicMock()
+            mock_http_connections = MagicMock()
+            
+            # Import metrics module
+            import metrics
+            
+            # Patch the new metrics
+            with patch.object(metrics, 'cache_operations_total', mock_cache_ops, create=True), \
+                 patch.object(metrics, 'cache_hit_ratio', mock_cache_ratio, create=True), \
+                 patch.object(metrics, 'concurrent_operations_total', mock_concurrent_ops, create=True), \
+                 patch.object(metrics, 'http_connections_active', mock_http_connections, create=True):
+                
+                yield {
+                    'cache_operations': mock_cache_ops,
+                    'cache_ratio': mock_cache_ratio,
+                    'concurrent_operations': mock_concurrent_ops,
+                    'http_connections': mock_http_connections
+                }
+
+    def test_track_cache_operation_hit(self, mock_new_metrics):
+        """Test track_cache_operation for cache hit"""
+        from metrics import track_cache_operation
+        
+        track_cache_operation("labels", True)
+        
+        # Verify metrics were recorded
+        mock_new_metrics['cache_operations'].labels.assert_called_with(
+            operation="labels", result='hit'
+        )
+        mock_new_metrics['cache_operations'].labels().inc.assert_called_once()
+
+    def test_track_cache_operation_miss(self, mock_new_metrics):
+        """Test track_cache_operation for cache miss"""
+        from metrics import track_cache_operation
+        
+        track_cache_operation("comments", False)
+        
+        # Verify metrics were recorded
+        mock_new_metrics['cache_operations'].labels.assert_called_with(
+            operation="comments", result='miss'
+        )
+        mock_new_metrics['cache_operations'].labels().inc.assert_called_once()
+
+    def test_update_cache_hit_ratio(self, mock_new_metrics):
+        """Test update_cache_hit_ratio function"""
+        from metrics import update_cache_hit_ratio
+        
+        update_cache_hit_ratio(75, 100)
+        
+        # Verify metric was set to 75%
+        mock_new_metrics['cache_ratio'].set.assert_called_once_with(75.0)
+
+    def test_update_cache_hit_ratio_zero_total(self, mock_new_metrics):
+        """Test update_cache_hit_ratio with zero total"""
+        from metrics import update_cache_hit_ratio
+        
+        update_cache_hit_ratio(0, 0)
+        
+        # Should not call set when total is 0
+        mock_new_metrics['cache_ratio'].set.assert_not_called()
+
+    def test_track_concurrent_operation(self, mock_new_metrics):
+        """Test track_concurrent_operation function"""
+        from metrics import track_concurrent_operation
+        
+        track_concurrent_operation("issue_enrichment")
+        
+        # Verify metric was recorded
+        mock_new_metrics['concurrent_operations'].labels.assert_called_with(
+            operation_type="issue_enrichment"
+        )
+        mock_new_metrics['concurrent_operations'].labels().inc.assert_called_once()
+
+    def test_set_http_connections_active(self, mock_new_metrics):
+        """Test set_http_connections_active function"""
+        from metrics import set_http_connections_active
+        
+        set_http_connections_active(15)
+        
+        # Verify metric was set
+        mock_new_metrics['http_connections'].set.assert_called_once_with(15)
+
+    @patch('metrics.ENABLE_METRICS', False)
+    @patch('metrics.PROMETHEUS_AVAILABLE', True)
+    def test_new_metrics_disabled(self):
+        """Test new metrics functions when metrics are disabled"""
+        from metrics import (
+            track_cache_operation,
+            update_cache_hit_ratio,
+            track_concurrent_operation,
+            set_http_connections_active
+        )
+        
+        # Should not raise any errors when metrics are disabled
+        track_cache_operation("test", True)
+        update_cache_hit_ratio(50, 100)
+        track_concurrent_operation("test_op")
+        set_http_connections_active(10)
+
+    @patch('metrics.ENABLE_METRICS', True)
+    @patch('metrics.PROMETHEUS_AVAILABLE', False)
+    def test_new_metrics_no_prometheus(self):
+        """Test new metrics functions when Prometheus is not available"""
+        from metrics import (
+            track_cache_operation,
+            update_cache_hit_ratio,
+            track_concurrent_operation,
+            set_http_connections_active
+        )
+        
+        # Should not raise any errors when Prometheus is not available
+        track_cache_operation("test", False)
+        update_cache_hit_ratio(25, 100)
+        track_concurrent_operation("test_op")
+        set_http_connections_active(5)
+
+
+class TestMetricsIntegration:
+    """Integration tests for metrics functionality"""
+
+    @patch('metrics.ENABLE_METRICS', True)
+    @patch('metrics.PROMETHEUS_AVAILABLE', True)
+    def test_all_metrics_functions_available(self):
+        """Test that all metrics functions are available when enabled"""
+        from metrics import (
+            track_tool_usage,
+            track_snowflake_query,
+            set_active_connections,
+            track_cache_operation,
+            update_cache_hit_ratio,
+            track_concurrent_operation,
+            set_http_connections_active,
+            start_metrics_thread
+        )
+        
+        # All functions should be callable
+        assert callable(track_tool_usage)
+        assert callable(track_snowflake_query)
+        assert callable(set_active_connections)
+        assert callable(track_cache_operation)
+        assert callable(update_cache_hit_ratio)
+        assert callable(track_concurrent_operation)
+        assert callable(set_http_connections_active)
+        assert callable(start_metrics_thread)
+
+    def test_metrics_initialization_with_new_metrics(self):
+        """Test that metrics module initializes correctly with new metrics"""
+        # Should not raise any import errors
+        import metrics
+        
+        # Check that the module has the expected attributes
+        assert hasattr(metrics, 'track_cache_operation')
+        assert hasattr(metrics, 'update_cache_hit_ratio')
+        assert hasattr(metrics, 'track_concurrent_operation')
+        assert hasattr(metrics, 'set_http_connections_active')

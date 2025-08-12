@@ -16,7 +16,16 @@ from database import (  # noqa: E402
     parse_snowflake_timestamp,
     get_issue_labels,
     get_issue_comments,
-    get_issue_links
+    get_issue_links,
+    get_issue_enrichment_data_concurrent,
+    execute_queries_in_batches,
+    format_snowflake_rows_concurrent,
+    get_connection_pool,
+    get_cache_key,
+    get_from_cache,
+    set_in_cache,
+    clear_cache,
+    cleanup_resources
 )
 
 
@@ -192,8 +201,13 @@ class TestExecuteSnowflakeQuery:
     @pytest.mark.asyncio
     @patch('database.make_snowflake_request')
     @patch('database.track_snowflake_query')
-    async def test_query_with_pagination(self, mock_track, mock_request):
+    @patch('database.get_from_cache')
+    @patch('database.set_in_cache')
+    async def test_query_with_pagination(self, mock_set_cache, mock_get_cache, mock_track, mock_request):
         """Test query execution with pagination"""
+        # Mock cache miss
+        mock_get_cache.return_value = None
+        
         # First call returns data with partition info
         first_response = {
             "data": [["row1col1", "row1col2"]],
@@ -220,15 +234,17 @@ class TestExecuteSnowflakeQuery:
     @pytest.mark.asyncio
     @patch('database.make_snowflake_request')
     @patch('database.track_snowflake_query')
-    async def test_query_resultset_format(self, mock_track, mock_request):
+    @patch('database.clear_cache')
+    async def test_query_resultset_format(self, mock_clear_cache, mock_track, mock_request):
         """Test query execution with resultSet format"""
+        mock_clear_cache()  # Clear cache before test
         mock_request.return_value = {
             "resultSet": {
                 "data": [["row1col1", "row1col2"]]
             }
         }
 
-        result = await execute_snowflake_query("SELECT * FROM test", "token")
+        result = await execute_snowflake_query("SELECT * FROM test", "token", use_cache=False)
 
         assert len(result) == 1
         assert result[0] == ["row1col1", "row1col2"]
@@ -236,11 +252,13 @@ class TestExecuteSnowflakeQuery:
     @pytest.mark.asyncio
     @patch('database.make_snowflake_request')
     @patch('database.track_snowflake_query')
-    async def test_query_no_response(self, mock_track, mock_request):
+    @patch('database.clear_cache')
+    async def test_query_no_response(self, mock_clear_cache, mock_track, mock_request):
         """Test query execution when no response is returned"""
+        mock_clear_cache()  # Clear cache before test
         mock_request.return_value = None
 
-        result = await execute_snowflake_query("SELECT * FROM test", "token")
+        result = await execute_snowflake_query("SELECT * FROM test", "token", use_cache=False)
 
         assert result == []
         mock_track.assert_called_once()
@@ -248,11 +266,13 @@ class TestExecuteSnowflakeQuery:
     @pytest.mark.asyncio
     @patch('database.make_snowflake_request')
     @patch('database.track_snowflake_query')
-    async def test_query_exception(self, mock_track, mock_request):
+    @patch('database.clear_cache')
+    async def test_query_exception(self, mock_clear_cache, mock_track, mock_request):
         """Test query execution when exception occurs"""
+        mock_clear_cache()  # Clear cache before test
         mock_request.side_effect = Exception("Database error")
 
-        result = await execute_snowflake_query("SELECT * FROM test", "token")
+        result = await execute_snowflake_query("SELECT * FROM test", "token", use_cache=False)
 
         assert result == []
         mock_track.assert_called_once()
@@ -551,11 +571,13 @@ class TestGetIssueComments:
 
     @pytest.mark.asyncio
     @patch('database.execute_snowflake_query')
-    async def test_get_comments_exception(self, mock_query):
+    @patch('database.clear_cache')
+    async def test_get_comments_exception(self, mock_clear_cache, mock_query):
         """Test exception handling"""
+        mock_clear_cache()  # Clear cache before test
         mock_query.side_effect = Exception("Database error")
 
-        result = await get_issue_comments(["123"], "token")
+        result = await get_issue_comments(["123"], "token", use_cache=False)
         assert result == {}
 
 
@@ -633,9 +655,309 @@ class TestGetIssueLinks:
 
     @pytest.mark.asyncio
     @patch('database.execute_snowflake_query')
-    async def test_get_links_exception(self, mock_query):
+    @patch('database.clear_cache')
+    async def test_get_links_exception(self, mock_clear_cache, mock_query):
         """Test exception handling"""
+        mock_clear_cache()  # Clear cache before test
         mock_query.side_effect = Exception("Database error")
 
-        result = await get_issue_links(["123"], "token")
+        result = await get_issue_links(["123"], "token", use_cache=False)
         assert result == {}
+
+
+class TestCacheFunctionality:
+    """Test cases for caching functionality"""
+
+    def test_get_cache_key(self):
+        """Test cache key generation"""
+        key = get_cache_key("test_op", param1="value1", param2="value2")
+        assert key == "test_op:param1:value1:param2:value2"
+
+    def test_get_cache_key_with_none_values(self):
+        """Test cache key generation with None values"""
+        key = get_cache_key("test_op", param1="value1", param2=None)
+        assert key == "test_op:param1:value1"
+
+    def test_get_cache_key_empty_params(self):
+        """Test cache key generation with no parameters"""
+        key = get_cache_key("test_op")
+        assert key == "test_op"
+
+    @patch('database.ENABLE_CACHING', True)
+    def test_cache_operations_enabled(self):
+        """Test cache operations when caching is enabled"""
+        clear_cache()  # Start fresh
+        
+        # Test cache miss
+        result = get_from_cache("test_key")
+        assert result is None
+        
+        # Test cache set and hit
+        test_data = {"test": "data"}
+        set_in_cache("test_key", test_data)
+        result = get_from_cache("test_key")
+        assert result == test_data
+
+    @patch('database.ENABLE_CACHING', False)
+    def test_cache_operations_disabled(self):
+        """Test cache operations when caching is disabled"""
+        # Should not cache when disabled
+        set_in_cache("test_key", {"test": "data"})
+        result = get_from_cache("test_key")
+        assert result is None
+
+    def test_clear_cache(self):
+        """Test cache clearing"""
+        set_in_cache("test_key", {"test": "data"})
+        clear_cache()
+        result = get_from_cache("test_key")
+        assert result is None
+
+
+class TestConnectionPool:
+    """Test cases for connection pool functionality"""
+
+    def test_get_connection_pool(self):
+        """Test connection pool creation"""
+        pool = get_connection_pool()
+        assert pool is not None
+        assert hasattr(pool, 'max_connections')
+        assert hasattr(pool, 'timeout')
+
+    def test_connection_pool_singleton(self):
+        """Test that connection pool is a singleton"""
+        pool1 = get_connection_pool()
+        pool2 = get_connection_pool()
+        assert pool1 is pool2
+
+    @pytest.mark.asyncio
+    async def test_connection_pool_client(self):
+        """Test connection pool client creation"""
+        pool = get_connection_pool()
+        client = await pool.get_client()
+        assert client is not None
+        assert hasattr(client, 'request')
+
+    @pytest.mark.asyncio
+    async def test_cleanup_resources(self):
+        """Test resource cleanup"""
+        # Should not raise any exceptions
+        await cleanup_resources()
+
+
+class TestMakeSnowflakeRequestWithCaching:
+    """Test cases for make_snowflake_request with caching"""
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_TOKEN', 'test_token')
+    @patch('database.SNOWFLAKE_BASE_URL', 'https://test.snowflake.com')
+    @patch('database.get_connection_pool')
+    @patch('database._throttler')
+    async def test_request_with_caching_enabled(self, mock_throttler, mock_pool):
+        """Test request with caching enabled"""
+        # Setup mocks
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": "test"}
+        mock_response.raise_for_status = MagicMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+        
+        mock_pool_instance = MagicMock()
+        mock_pool_instance.get_client = AsyncMock(return_value=mock_client)
+        mock_pool.return_value = mock_pool_instance
+        
+        mock_throttler.__aenter__ = AsyncMock()
+        mock_throttler.__aexit__ = AsyncMock()
+
+        clear_cache()  # Start fresh
+        
+        # First request should hit the API
+        result1 = await make_snowflake_request("test", "GET", {"param": "value"}, use_cache=True)
+        assert result1 == {"data": "test"}
+        
+        # Second identical request should hit cache (if caching is enabled)
+        result2 = await make_snowflake_request("test", "GET", {"param": "value"}, use_cache=True)
+        assert result2 == {"data": "test"}
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_TOKEN', 'test_token')
+    @patch('database.SNOWFLAKE_BASE_URL', 'https://test.snowflake.com')
+    @patch('database.get_connection_pool')
+    @patch('database._throttler')
+    async def test_request_with_caching_disabled(self, mock_throttler, mock_pool):
+        """Test request with caching disabled"""
+        # Setup mocks
+        mock_client = AsyncMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": "test"}
+        mock_response.raise_for_status = MagicMock()
+        mock_client.request = AsyncMock(return_value=mock_response)
+        
+        mock_pool_instance = MagicMock()
+        mock_pool_instance.get_client = AsyncMock(return_value=mock_client)
+        mock_pool.return_value = mock_pool_instance
+        
+        mock_throttler.__aenter__ = AsyncMock()
+        mock_throttler.__aexit__ = AsyncMock()
+
+        result = await make_snowflake_request("test", "POST", {"param": "value"}, use_cache=False)
+        assert result == {"data": "test"}
+        mock_client.request.assert_called_once()
+
+
+class TestExecuteSnowflakeQueryWithCaching:
+    """Test cases for execute_snowflake_query with caching"""
+
+    @pytest.mark.asyncio
+    @patch('database.make_snowflake_request')
+    @patch('database.track_snowflake_query')
+    async def test_query_with_cache_hit(self, mock_track, mock_request):
+        """Test query execution with cache hit"""
+        mock_request.return_value = {"data": [["row1", "row2"]]}
+        
+        clear_cache()  # Start fresh
+        
+        # First query should hit the API
+        result1 = await execute_snowflake_query("SELECT * FROM test", "token", use_cache=True)
+        assert result1 == [["row1", "row2"]]
+        
+        # Second identical query should hit cache (if caching is enabled)
+        result2 = await execute_snowflake_query("SELECT * FROM test", "token", use_cache=True)
+        assert result2 == [["row1", "row2"]]
+
+    @pytest.mark.asyncio
+    @patch('database.make_snowflake_request')
+    @patch('database.track_snowflake_query')
+    async def test_query_without_caching(self, mock_track, mock_request):
+        """Test query execution without caching"""
+        mock_request.return_value = {"data": [["row1", "row2"]]}
+        
+        result = await execute_snowflake_query("INSERT INTO test VALUES (1)", "token", use_cache=False)
+        assert result == [["row1", "row2"]]
+        mock_request.assert_called_once()
+
+
+class TestConcurrentFunctions:
+    """Test cases for concurrent processing functions"""
+
+    @pytest.mark.asyncio
+    @patch('database.get_issue_labels')
+    @patch('database.get_issue_comments') 
+    @patch('database.get_issue_links')
+    async def test_get_issue_enrichment_data_concurrent_success(self, mock_links, mock_comments, mock_labels):
+        """Test successful concurrent data enrichment"""
+        # Setup mocks
+        mock_labels.return_value = {"123": ["bug", "urgent"]}
+        mock_comments.return_value = {"123": [{"id": "c1", "body": "comment"}]}
+        mock_links.return_value = {"123": [{"id": "l1", "type": "blocks"}]}
+        
+        labels, comments, links = await get_issue_enrichment_data_concurrent(["123"], "token")
+        
+        assert labels == {"123": ["bug", "urgent"]}
+        assert comments == {"123": [{"id": "c1", "body": "comment"}]}
+        assert links == {"123": [{"id": "l1", "type": "blocks"}]}
+        
+        # Verify all functions were called concurrently
+        mock_labels.assert_called_once_with(["123"], "token", True)
+        mock_comments.assert_called_once_with(["123"], "token", True)
+        mock_links.assert_called_once_with(["123"], "token", True)
+
+    @pytest.mark.asyncio
+    async def test_get_issue_enrichment_data_concurrent_empty_input(self):
+        """Test concurrent data enrichment with empty input"""
+        labels, comments, links = await get_issue_enrichment_data_concurrent([], "token")
+        
+        assert labels == {}
+        assert comments == {}
+        assert links == {}
+
+    @pytest.mark.asyncio
+    @patch('database.get_issue_labels')
+    @patch('database.get_issue_comments') 
+    @patch('database.get_issue_links')
+    async def test_get_issue_enrichment_data_concurrent_with_exception(self, mock_links, mock_comments, mock_labels):
+        """Test concurrent data enrichment with one function failing"""
+        # Setup mocks - one fails, others succeed
+        mock_labels.side_effect = Exception("Labels error")
+        mock_comments.return_value = {"123": [{"id": "c1", "body": "comment"}]}
+        mock_links.return_value = {"123": [{"id": "l1", "type": "blocks"}]}
+        
+        labels, comments, links = await get_issue_enrichment_data_concurrent(["123"], "token")
+        
+        # Failed operation should return empty dict
+        assert labels == {}
+        assert comments == {"123": [{"id": "c1", "body": "comment"}]}
+        assert links == {"123": [{"id": "l1", "type": "blocks"}]}
+
+    @pytest.mark.asyncio
+    @patch('database.execute_snowflake_query')
+    async def test_execute_queries_in_batches_success(self, mock_query):
+        """Test successful batch query execution"""
+        # Mock query returns
+        mock_query.side_effect = [
+            [["row1", "col1"]],
+            [["row2", "col2"]],
+            [["row3", "col3"]]
+        ]
+        
+        queries = ["SELECT 1", "SELECT 2", "SELECT 3"]
+        results = await execute_queries_in_batches(queries, "token", batch_size=2)
+        
+        assert len(results) == 3
+        assert results[0] == [["row1", "col1"]]
+        assert results[1] == [["row2", "col2"]]
+        assert results[2] == [["row3", "col3"]]
+        
+        # Should be called 3 times (once per query)
+        assert mock_query.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_execute_queries_in_batches_empty_input(self):
+        """Test batch query execution with empty input"""
+        results = await execute_queries_in_batches([], "token")
+        assert results == []
+
+    @pytest.mark.asyncio
+    @patch('database.execute_snowflake_query')
+    async def test_execute_queries_in_batches_with_exception(self, mock_query):
+        """Test batch query execution with one query failing"""
+        # First query succeeds, second fails
+        mock_query.side_effect = [
+            [["row1", "col1"]],
+            Exception("Query error")
+        ]
+        
+        queries = ["SELECT 1", "SELECT 2"]
+        results = await execute_queries_in_batches(queries, "token", batch_size=1)
+        
+        assert len(results) == 2
+        assert results[0] == [["row1", "col1"]]
+        assert results[1] == []  # Failed query returns empty list
+
+    @pytest.mark.asyncio
+    @patch('database._thread_pool')
+    async def test_format_snowflake_rows_concurrent_small_dataset(self, mock_thread_pool):
+        """Test concurrent row formatting with small dataset"""
+        import asyncio
+        
+        rows = [["val1", "val2"], ["val3", "val4"]]
+        columns = ["col1", "col2"]
+        
+        # Mock the thread pool execution
+        expected_result = [{"col1": "val1", "col2": "val2"}, {"col1": "val3", "col2": "val4"}]
+        
+        loop = asyncio.get_event_loop()
+        future = asyncio.Future()
+        future.set_result(expected_result)
+        loop.run_in_executor = AsyncMock(return_value=expected_result)
+        
+        with patch('database.asyncio.get_event_loop', return_value=loop):
+            result = await format_snowflake_rows_concurrent(rows, columns, batch_size=100)
+        
+        assert result == expected_result
+
+    @pytest.mark.asyncio
+    async def test_format_snowflake_rows_concurrent_empty_input(self):
+        """Test concurrent row formatting with empty input"""
+        result = await format_snowflake_rows_concurrent([], ["col1", "col2"])
+        assert result == []
