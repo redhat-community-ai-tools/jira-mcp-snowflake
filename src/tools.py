@@ -229,14 +229,21 @@ def register_tools(mcp: FastMCP) -> None:
                 return {"error": "Snowflake token not available"}
 
             sql = f"""
-            SELECT
-                ID, ISSUE_KEY, PROJECT, ISSUENUM, ISSUETYPE, SUMMARY, DESCRIPTION,
-                PRIORITY, ISSUESTATUS, RESOLUTION, CREATED, UPDATED, DUEDATE,
-                RESOLUTIONDATE, VOTES, WATCHES, ENVIRONMENT, COMPONENT, FIXFOR,
-                TIMEORIGINALESTIMATE, TIMEESTIMATE, TIMESPENT, WORKFLOW_ID,
-                SECURITY, ARCHIVED, ARCHIVEDDATE
-            FROM JIRA_ISSUE_NON_PII
-            WHERE ISSUE_KEY = '{sanitize_sql_value(issue_key)}'
+            SELECT DISTINCT
+                i.ID, i.ISSUE_KEY, i.PROJECT, i.ISSUENUM, i.ISSUETYPE, i.SUMMARY, i.DESCRIPTION,
+                i.PRIORITY, i.ISSUESTATUS, i.RESOLUTION, i.CREATED, i.UPDATED, i.DUEDATE,
+                i.RESOLUTIONDATE, i.VOTES, i.WATCHES, i.ENVIRONMENT, i.COMPONENT, i.FIXFOR,
+                i.TIMEORIGINALESTIMATE, i.TIMEESTIMATE, i.TIMESPENT, i.WORKFLOW_ID,
+                i.SECURITY, i.ARCHIVED, i.ARCHIVEDDATE,
+                c.CNAME as COMPONENT_NAME, c.DESCRIPTION as COMPONENT_DESCRIPTION,
+                c.ARCHIVED as COMPONENT_ARCHIVED, c.DELETED as COMPONENT_DELETED
+            FROM JIRA_ISSUE_NON_PII i
+            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+                ON i.ID = na.SOURCE_NODE_ID
+                AND na.ASSOCIATION_TYPE = 'IssueComponent'
+            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+                ON na.SINK_NODE_ID = c.ID
+            WHERE i.ISSUE_KEY = '{sanitize_sql_value(issue_key)}'
             LIMIT 1
             """
 
@@ -251,7 +258,8 @@ def register_tools(mcp: FastMCP) -> None:
                 "PRIORITY", "ISSUESTATUS", "RESOLUTION", "CREATED", "UPDATED", "DUEDATE",
                 "RESOLUTIONDATE", "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR",
                 "TIMEORIGINALESTIMATE", "TIMEESTIMATE", "TIMESPENT", "WORKFLOW_ID",
-                "SECURITY", "ARCHIVED", "ARCHIVEDDATE"
+                "SECURITY", "ARCHIVED", "ARCHIVEDDATE",
+                "COMPONENT_NAME", "COMPONENT_DESCRIPTION", "COMPONENT_ARCHIVED", "COMPONENT_DELETED"
             ]
 
             row_dict = format_snowflake_row(rows[0], columns)
@@ -282,7 +290,8 @@ def register_tools(mcp: FastMCP) -> None:
                 "workflow_id": row_dict.get("WORKFLOW_ID"),
                 "security": row_dict.get("SECURITY"),
                 "archived": row_dict.get("ARCHIVED"),
-                "archived_date": row_dict.get("ARCHIVEDDATE")
+                "archived_date": row_dict.get("ARCHIVEDDATE"),
+                "component_name": row_dict.get("COMPONENT_NAME"),
             }
 
             # Get labels, comments, and links concurrently for this issue
