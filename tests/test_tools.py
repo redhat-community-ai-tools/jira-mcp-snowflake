@@ -212,10 +212,11 @@ class TestRegisterTools:
         assert "i.PRIORITY = 'High'" in sql_call
         assert "LOWER(i.SUMMARY) LIKE '%test search%'" in sql_call
         
-        # Verify timeframe condition is included
-        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
-        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
-        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
+        # Verify timeframe condition is included (backward compatibility - only filters by creation)
+        assert "i.CREATED >= DATEADD(DAY, -14, CURRENT_TIMESTAMP())" in sql_call
+        # Updated and resolution date filters should NOT be included with new logic
+        assert "i.UPDATED >= DATEADD(DAY, -14, CURRENT_TIMESTAMP())" not in sql_call
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, -14, CURRENT_TIMESTAMP())" not in sql_call
         
         # Verify filters_applied includes timeframe
         assert result['filters_applied']['timeframe'] == 14
@@ -374,12 +375,13 @@ class TestRegisterTools:
         # Call without specifying timeframe (should use default 30)
         result = await list_jira_issues(project='TEST')
         
-        # Verify SQL conditions include default timeframe
+        # Verify SQL conditions include default timeframe (creation only)
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
-        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
-        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
+        assert "i.CREATED >= DATEADD(DAY, -30, CURRENT_TIMESTAMP())" in sql_call
+        # Updated and resolution date filters should NOT be included with new logic
+        assert "i.UPDATED >= DATEADD(DAY, -30, CURRENT_TIMESTAMP())" not in sql_call
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, -30, CURRENT_TIMESTAMP())" not in sql_call
         
         # Verify filters_applied includes default timeframe
         assert result['filters_applied']['timeframe'] == 30
@@ -395,12 +397,13 @@ class TestRegisterTools:
         # Test with custom timeframe
         result = await list_jira_issues(project='KONFLUX', timeframe=7)
         
-        # Verify SQL conditions include custom timeframe
+        # Verify SQL conditions include custom timeframe (creation only)
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
-        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
-        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
+        assert "i.CREATED >= DATEADD(DAY, -7, CURRENT_TIMESTAMP())" in sql_call
+        # Updated and resolution date filters should NOT be included with new logic
+        assert "i.UPDATED >= DATEADD(DAY, -7, CURRENT_TIMESTAMP())" not in sql_call
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, -7, CURRENT_TIMESTAMP())" not in sql_call
         
         # Verify filters_applied includes custom timeframe
         assert result['filters_applied']['timeframe'] == 7
@@ -419,8 +422,8 @@ class TestRegisterTools:
         # Verify SQL conditions do NOT include timeframe
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "INTERVAL" not in sql_call
-        assert "CURRENT_DATE()" not in sql_call
+        assert "DATEADD" not in sql_call
+        assert "CURRENT_TIMESTAMP()" not in sql_call
         
         # Verify filters_applied includes timeframe=0
         assert result['filters_applied']['timeframe'] == 0
@@ -436,15 +439,162 @@ class TestRegisterTools:
         # Test with large timeframe
         result = await list_jira_issues(timeframe=365)
         
-        # Verify SQL conditions include large timeframe
+        # Verify SQL conditions include large timeframe (creation only)
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
-        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
-        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
+        assert "i.CREATED >= DATEADD(DAY, -365, CURRENT_TIMESTAMP())" in sql_call
+        # Updated and resolution date filters should NOT be included with new logic
+        assert "i.UPDATED >= DATEADD(DAY, -365, CURRENT_TIMESTAMP())" not in sql_call
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, -365, CURRENT_TIMESTAMP())" not in sql_call
         
         # Verify filters_applied includes large timeframe
         assert result['filters_applied']['timeframe'] == 365
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_created_days_filter(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with created_days filter (overrides timeframe)"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with both timeframe and created_days (created_days should take precedence)
+        result = await list_jira_issues(project='TEST', timeframe=30, created_days=7)
+        
+        # Verify SQL conditions use created_days, not timeframe
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.CREATED >= DATEADD(DAY, -7, CURRENT_TIMESTAMP())" in sql_call
+        assert "i.CREATED >= DATEADD(DAY, -30, CURRENT_TIMESTAMP())" not in sql_call
+        
+        # Verify filters_applied includes both values
+        assert result['filters_applied']['timeframe'] == 30
+        assert result['filters_applied']['created_days'] == 7
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_updated_days_filter(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with updated_days filter"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with updated_days filter
+        result = await list_jira_issues(project='TEST', updated_days=14)
+        
+        # Verify SQL conditions include updated filter
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.UPDATED >= DATEADD(DAY, -14, CURRENT_TIMESTAMP())" in sql_call
+        
+        # Verify filters_applied includes updated_days
+        assert result['filters_applied']['updated_days'] == 14
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_resolved_days_filter(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with resolved_days filter"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with resolved_days filter
+        result = await list_jira_issues(project='TEST', resolved_days=21)
+        
+        # Verify SQL conditions include resolution filter
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, -21, CURRENT_TIMESTAMP())" in sql_call
+        
+        # Verify filters_applied includes resolved_days
+        assert result['filters_applied']['resolved_days'] == 21
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_multiple_date_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with multiple specific date filters"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with all three specific date filters
+        result = await list_jira_issues(
+            project='TEST',
+            created_days=7,
+            updated_days=14,
+            resolved_days=21
+        )
+        
+        # Verify SQL conditions include all three filters (AND logic)
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.CREATED >= DATEADD(DAY, -7, CURRENT_TIMESTAMP())" in sql_call
+        assert "i.UPDATED >= DATEADD(DAY, -14, CURRENT_TIMESTAMP())" in sql_call
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, -21, CURRENT_TIMESTAMP())" in sql_call
+        
+        # Verify filters_applied includes all values
+        assert result['filters_applied']['created_days'] == 7
+        assert result['filters_applied']['updated_days'] == 14
+        assert result['filters_applied']['resolved_days'] == 21
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_zero_date_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with zero values for date filters (should be ignored)"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with zero values (should be ignored)
+        result = await list_jira_issues(
+            project='TEST',
+            timeframe=0,
+            created_days=0,
+            updated_days=0,
+            resolved_days=0
+        )
+        
+        # Verify no date filters are applied
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "DATEADD" not in sql_call
+        assert "CURRENT_TIMESTAMP()" not in sql_call
+        
+        # Verify filters_applied includes all zero values
+        assert result['filters_applied']['timeframe'] == 0
+        assert result['filters_applied']['created_days'] == 0
+        assert result['filters_applied']['updated_days'] == 0
+        assert result['filters_applied']['resolved_days'] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_zero_specific_date_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with zero values for specific date filters (defaults)"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with default zero values and a timeframe (should fall back to timeframe)
+        result = await list_jira_issues(
+            project='TEST',
+            timeframe=7,
+            created_days=0,
+            updated_days=0,
+            resolved_days=0
+        )
+        
+        # Verify only timeframe filter is applied (creation only)
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.CREATED >= DATEADD(DAY, -7, CURRENT_TIMESTAMP())" in sql_call
+        assert "i.UPDATED >= DATEADD(DAY, " not in sql_call
+        assert "i.RESOLUTIONDATE >= DATEADD(DAY, " not in sql_call
+        
+        # Verify filters_applied includes zero values
+        assert result['filters_applied']['timeframe'] == 7
+        assert result['filters_applied']['created_days'] == 0
+        assert result['filters_applied']['updated_days'] == 0
+        assert result['filters_applied']['resolved_days'] == 0
 
 
 class TestConcurrentProcessingIntegration:
