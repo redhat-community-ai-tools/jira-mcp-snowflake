@@ -1,0 +1,64 @@
+---
+alwaysApply: true
+description: Python development practices for jira-mcp-snowflake project
+---
+
+# Python Development Rules for jira-mcp-snowflake
+
+## Package Management - Always Use UV
+
+This project uses [UV](https://docs.astral.sh/uv/) for Python package management. **ALWAYS** use `uv` commands instead of `pip` or other package managers:
+
+- **Install dependencies**: `uv sync --dev` (includes dev dependencies)
+- **Run Python scripts**: `uv run <script>` 
+- **Run tests**: `uv run pytest`
+- **Run linting**: `uv run flake8`
+- **Add new dependencies**: `uv add <package>`
+- **Add dev dependencies**: `uv add --dev <package>`
+
+Reference the project configuration in [pyproject.toml](mdc:pyproject.toml) for dependency management.
+
+## Testing Requirements
+
+**MANDATORY**: After every code change, run the full test suite using:
+
+```bash
+make test
+```
+
+This command (defined in [Makefile](mdc:Makefile)) will:
+1. Sync dependencies with `uv sync --dev`
+2. Run `flake8` linting on the `src/` directory
+3. Run `pytest` with coverage reporting
+
+### Individual Test Commands
+
+If you need to run specific parts:
+- **Linting only**: `make lint` or `uv run flake8 src/ --max-line-length=120 --ignore=E501,W503`
+- **Unit tests only**: `make pytest` or `uv run pytest tests/ --cov=src --cov-report=xml --cov-report=term -v --tb=short`
+
+## Code Quality Standards
+
+- **Flake8 configuration**: Max line length 120, ignoring E501 and W503
+- **Test coverage**: All code changes should maintain or improve test coverage
+- **Test files**: Located in [tests/](mdc:tests/) directory
+
+## Project Structure
+
+- **Source code**: [src/](mdc:src/) directory
+- **Tests**: [tests/](mdc:tests/) directory  
+- **Main entry point**: [src/mcp_server.py](mdc:src/mcp_server.py)
+- **Core modules**: 
+  - [src/tools.py](mdc:src/tools.py) - JIRA data access tools
+  - [src/database.py](mdc:src/database.py) - Database connections
+  - [src/config.py](mdc:src/config.py) - Configuration management
+  - [src/metrics.py](mdc:src/metrics.py) - Prometheus metrics
+
+## Workflow
+
+1. Make code changes
+2. Run `make test` to ensure all tests pass and code meets quality standards
+3. Only proceed if all tests pass and linting is clean
+4. Commit changes
+
+**Never skip the testing step** - it's essential for maintaining code quality and preventing regressions.

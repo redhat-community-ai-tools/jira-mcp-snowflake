@@ -52,7 +52,8 @@ def register_tools(mcp: FastMCP) -> None:
         priority: Optional[str] = None,
         limit: int = 50,
         search_text: Optional[str] = None,
-        timeframe: int = 30
+        timeframe: int = 30,
+        components: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
 
@@ -64,6 +65,7 @@ def register_tools(mcp: FastMCP) -> None:
             limit: Maximum number of issues to return (default: 50)
             search_text: Search in summary and description fields
             timeframe: Filter issues updated/created/resolved within last N days (default: 30)
+            components: Search in component name and description fields
 
         Returns:
             Dictionary containing issues list and metadata
@@ -74,31 +76,35 @@ def register_tools(mcp: FastMCP) -> None:
             if not snowflake_token:
                 return {"error": "Snowflake token not available", "issues": []}
 
-            # Build SQL query with filters
+            # Build SQL query with filters - always include component joins
             sql_conditions = []
 
             if project:
-                sql_conditions.append(f"PROJECT = '{sanitize_sql_value(project.upper())}'")
+                sql_conditions.append(f"i.PROJECT = '{sanitize_sql_value(project.upper())}'")
 
             if issue_type:
-                sql_conditions.append(f"ISSUETYPE = '{sanitize_sql_value(issue_type)}'")
+                sql_conditions.append(f"i.ISSUETYPE = '{sanitize_sql_value(issue_type)}'")
 
             if status:
-                sql_conditions.append(f"ISSUESTATUS = '{sanitize_sql_value(status)}'")
+                sql_conditions.append(f"i.ISSUESTATUS = '{sanitize_sql_value(status)}'")
 
             if priority:
-                sql_conditions.append(f"PRIORITY = '{sanitize_sql_value(priority)}'")
+                sql_conditions.append(f"i.PRIORITY = '{sanitize_sql_value(priority)}'")
 
             if search_text:
-                search_condition = f"(LOWER(SUMMARY) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"
+                search_condition = f"(LOWER(i.SUMMARY) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(i.DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"
                 sql_conditions.append(search_condition)
+
+            if components:
+                components_condition = f"(LOWER(c.CNAME) LIKE '%{sanitize_sql_value(components.lower())}%' OR LOWER(c.DESCRIPTION) LIKE '%{sanitize_sql_value(components.lower())}%')"
+                sql_conditions.append(components_condition)
 
             # Add timeframe filter - check if any of the dates are within the specified timeframe
             if timeframe > 0:
                 timeframe_condition = f"""(
-                    CREATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
-                    OR UPDATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
-                    OR RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
+                    i.CREATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
+                    OR i.UPDATED >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
+                    OR i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '{timeframe} DAYS'
                 )"""
                 sql_conditions.append(timeframe_condition)
 
@@ -106,16 +112,24 @@ def register_tools(mcp: FastMCP) -> None:
             if sql_conditions:
                 where_clause = "WHERE " + " AND ".join(sql_conditions)
 
+            # Build the SQL query - always include component joins
             sql = f"""
-            SELECT
-                ID, ISSUE_KEY, PROJECT, ISSUENUM, ISSUETYPE, SUMMARY,
-                SUBSTRING(DESCRIPTION, 1, 500) as DESCRIPTION_TRUNCATED,
-                DESCRIPTION, PRIORITY, ISSUESTATUS, RESOLUTION,
-                CREATED, UPDATED, DUEDATE, RESOLUTIONDATE,
-                VOTES, WATCHES, ENVIRONMENT, COMPONENT, FIXFOR
-            FROM JIRA_ISSUE_NON_PII
+            SELECT DISTINCT
+                i.ID, i.ISSUE_KEY, i.PROJECT, i.ISSUENUM, i.ISSUETYPE, i.SUMMARY,
+                SUBSTRING(i.DESCRIPTION, 1, 500) as DESCRIPTION_TRUNCATED,
+                i.DESCRIPTION, i.PRIORITY, i.ISSUESTATUS, i.RESOLUTION,
+                i.CREATED, i.UPDATED, i.DUEDATE, i.RESOLUTIONDATE,
+                i.VOTES, i.WATCHES, i.ENVIRONMENT, i.COMPONENT, i.FIXFOR,
+                c.CNAME as COMPONENT_NAME, c.DESCRIPTION as COMPONENT_DESCRIPTION,
+                c.ARCHIVED as COMPONENT_ARCHIVED, c.DELETED as COMPONENT_DELETED
+            FROM JIRA_ISSUE_NON_PII i
+            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+                ON i.ID = na.SOURCE_NODE_ID
+                AND na.ASSOCIATION_TYPE = 'IssueComponent'
+            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+                ON na.SINK_NODE_ID = c.ID
             {where_clause}
-            ORDER BY CREATED DESC
+            ORDER BY i.CREATED DESC
             LIMIT {limit}
             """
 
@@ -129,7 +143,8 @@ def register_tools(mcp: FastMCP) -> None:
                 "ID", "ISSUE_KEY", "PROJECT", "ISSUENUM", "ISSUETYPE", "SUMMARY",
                 "DESCRIPTION_TRUNCATED", "DESCRIPTION", "PRIORITY", "ISSUESTATUS",
                 "RESOLUTION", "CREATED", "UPDATED", "DUEDATE", "RESOLUTIONDATE",
-                "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR"
+                "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR",
+                "COMPONENT_NAME", "COMPONENT_DESCRIPTION", "COMPONENT_ARCHIVED", "COMPONENT_DELETED"
             ]
 
             for row in rows:
@@ -155,7 +170,8 @@ def register_tools(mcp: FastMCP) -> None:
                     "watches": row_dict.get("WATCHES"),
                     "environment": row_dict.get("ENVIRONMENT"),
                     "component": row_dict.get("COMPONENT"),
-                    "fix_version": row_dict.get("FIXFOR")
+                    "fix_version": row_dict.get("FIXFOR"),
+                    "component_name": row_dict.get("COMPONENT_NAME"),
                 }
 
                 issues.append(issue)
@@ -186,6 +202,7 @@ def register_tools(mcp: FastMCP) -> None:
                     "priority": priority,
                     "search_text": search_text,
                     "timeframe": timeframe,
+                    "components": components,
                     "limit": limit
                 }
             }
@@ -345,119 +362,6 @@ def register_tools(mcp: FastMCP) -> None:
 
         except Exception as e:
             return {"error": f"Error generating project summary from Snowflake: {str(e)}"}
-
-    @mcp.tool()
-    @track_tool_usage("list_jira_components")
-    async def list_jira_components(
-        project: Optional[str] = None,
-        archived: Optional[str] = None,
-        deleted: Optional[str] = None,
-        issue: Optional[str] = None,
-        limit: int = 50,
-        search_text: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        List JIRA components from Snowflake with optional filtering.
-
-        Args:
-            issue: Filter by issue ID (e.g., 'SMQE-1280')
-            project: Filter by project ID (e.g., '12325621')
-            archived: Filter by archived status ('Y' or 'N')
-            deleted: Filter by deleted status ('Y' or 'N')
-            limit: Maximum number of components to return (default: 50)
-            search_text: Search in component name and description fields
-
-        Returns:
-            Dictionary containing components list and metadata
-        """
-        try:
-            # Get the Snowflake token
-            snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
-                return {"error": "Snowflake token not available", "components": []}
-
-            # Build SQL query with filters
-            sql_conditions = []
-
-            if issue:
-                sql_conditions.append(f"i.ISSUE_KEY = '{sanitize_sql_value(issue)}'")
-
-            if project:
-                sql_conditions.append(f"c.PROJECT = '{sanitize_sql_value(project)}'")
-
-            if archived:
-                sql_conditions.append(f"c.ARCHIVED = '{sanitize_sql_value(archived.upper())}'")
-
-            if deleted:
-                sql_conditions.append(f"c.DELETED = '{sanitize_sql_value(deleted.upper())}'")
-
-            if search_text:
-                search_condition = f"(LOWER(c.CNAME) LIKE '%{sanitize_sql_value(search_text.lower())}%' OR LOWER(c.DESCRIPTION) LIKE '%{sanitize_sql_value(search_text.lower())}%')"
-                sql_conditions.append(search_condition)
-
-            where_clause = ""
-            if sql_conditions:
-                where_clause = "WHERE " + " AND ".join(sql_conditions)
-
-            sql = f"""
-            SELECT
-                c.ID, c.PROJECT, c.CNAME as COMPONENT_NAME, c.DESCRIPTION, c.URL, c.LEAD,
-                c.ASSIGNEETYPE, c.ARCHIVED, c.DELETED, c._FIVETRAN_SYNCED
-                FROM JIRA_DB.RHAI_MARTS.JIRA_ISSUE_NON_PII i
-                JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
-                    ON i.ID = na.SOURCE_NODE_ID
-                    AND na.ASSOCIATION_TYPE = 'IssueComponent'
-                JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
-                    ON na.SINK_NODE_ID = c.ID
-                {where_clause}
-                ORDER BY c.CNAME ASC
-                LIMIT {limit}
-            """
-
-            rows = await execute_snowflake_query(sql, snowflake_token)
-
-            components = []
-
-            # Expected column order based on SELECT statement
-            columns = [
-                "ID", "PROJECT", "COMPONENT_NAME", "DESCRIPTION", "URL", "LEAD",
-                "ASSIGNEETYPE", "ARCHIVED", "DELETED", "_FIVETRAN_SYNCED"
-            ]
-
-            for row in rows:
-                row_dict = format_snowflake_row(row, columns)
-
-                # Build component object
-                component = {
-                    "id": row_dict.get("ID"),
-                    "project": row_dict.get("PROJECT"),
-                    "name": row_dict.get("COMPONENT_NAME"),
-                    "description": row_dict.get("DESCRIPTION") or "",
-                    "url": row_dict.get("URL"),
-                    "lead": row_dict.get("LEAD"),
-                    "assignee_type": row_dict.get("ASSIGNEETYPE"),
-                    "archived": row_dict.get("ARCHIVED"),
-                    "deleted": row_dict.get("DELETED"),
-                    "synced": row_dict.get("_FIVETRAN_SYNCED")
-                }
-
-                components.append(component)
-
-            return {
-                "components": components,
-                "total_returned": len(components),
-                "filters_applied": {
-                    "project": project,
-                    "issue": issue,
-                    "archived": archived,
-                    "deleted": deleted,
-                    "search_text": search_text,
-                    "limit": limit
-                }
-            }
-
-        except Exception as e:
-            return {"error": f"Error reading components from Snowflake: {str(e)}", "components": []}
 
     @mcp.tool()
     @track_tool_usage("get_jira_issue_links")

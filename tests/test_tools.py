@@ -131,8 +131,8 @@ class TestRegisterTools:
     def test_register_tools(self, mock_mcp):
         """Test that register_tools completes without error"""
         register_tools(mock_mcp)
-        # Verify that 5 tools were registered
-        assert len(mock_mcp._registered_tools) == 5
+        # Verify that 4 tools were registered (removed list_jira_components)
+        assert len(mock_mcp._registered_tools) == 4
 
     @pytest.mark.asyncio
     async def test_list_jira_issues_no_token(self, mock_mcp, mock_dependencies):
@@ -154,7 +154,8 @@ class TestRegisterTools:
         # Mock successful query result
         mock_dependencies['query'].return_value = [
             ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Short desc', 'Full description',
-             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None]
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None,
+             'Test Component', 'Test Component Desc', 'N', 'N']
         ]
         
         mock_dependencies['format'].return_value = {
@@ -163,7 +164,9 @@ class TestRegisterTools:
             'DESCRIPTION': 'Full description', 'PRIORITY': 'High', 'ISSUESTATUS': 'Open',
             'RESOLUTION': None, 'CREATED': '2024-01-01', 'UPDATED': '2024-01-02',
             'DUEDATE': None, 'RESOLUTIONDATE': None, 'VOTES': '0', 'WATCHES': '1',
-            'ENVIRONMENT': None, 'COMPONENT': None, 'FIXFOR': None
+            'ENVIRONMENT': None, 'COMPONENT': None, 'FIXFOR': None,
+            'COMPONENT_NAME': 'Test Component', 'COMPONENT_DESCRIPTION': 'Test Component Desc',
+            'COMPONENT_ARCHIVED': 'N', 'COMPONENT_DELETED': 'N'
         }
         
         mock_dependencies['enrichment'].return_value = (
@@ -203,16 +206,16 @@ class TestRegisterTools:
         # Verify SQL conditions were built correctly
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "PROJECT = 'TEST'" in sql_call
-        assert "ISSUETYPE = 'Bug'" in sql_call
-        assert "ISSUESTATUS = 'Open'" in sql_call
-        assert "PRIORITY = 'High'" in sql_call
-        assert "LOWER(SUMMARY) LIKE '%test search%'" in sql_call
+        assert "i.PROJECT = 'TEST'" in sql_call
+        assert "i.ISSUETYPE = 'Bug'" in sql_call
+        assert "i.ISSUESTATUS = 'Open'" in sql_call
+        assert "i.PRIORITY = 'High'" in sql_call
+        assert "LOWER(i.SUMMARY) LIKE '%test search%'" in sql_call
         
         # Verify timeframe condition is included
-        assert "CREATED >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
-        assert "UPDATED >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
-        assert "RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
+        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
+        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
+        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '14 DAYS'" in sql_call
         
         # Verify filters_applied includes timeframe
         assert result['filters_applied']['timeframe'] == 14
@@ -291,29 +294,43 @@ class TestRegisterTools:
         assert result['projects']['TEST']['total_issues'] == 15
 
     @pytest.mark.asyncio
-    async def test_list_jira_components_success(self, mock_mcp, mock_dependencies):
-        """Test successful list_jira_components execution"""
-        mock_dependencies['query'].return_value = [
-            ['comp1', 'proj1', 'Component 1', 'Description 1', 'http://url1',
-             'lead1', 'PROJECT_DEFAULT', 'N', 'N', '2024-01-01']
-        ]
-        
-        mock_dependencies['format'].return_value = {
-            'ID': 'comp1', 'PROJECT': 'proj1', 'COMPONENT_NAME': 'Component 1',
-            'DESCRIPTION': 'Description 1', 'URL': 'http://url1', 'LEAD': 'lead1',
-            'ASSIGNEETYPE': 'PROJECT_DEFAULT', 'ARCHIVED': 'N', 'DELETED': 'N',
-            '_FIVETRAN_SYNCED': '2024-01-01'
-        }
+    async def test_list_jira_issues_with_component_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with component filters"""
+        mock_dependencies['query'].return_value = []
         
         register_tools(mock_mcp)
-        list_jira_components = mock_mcp._registered_tools[3]
+        list_jira_issues = mock_mcp._registered_tools[0]
         
-        result = await list_jira_components(project='proj1')
+        result = await list_jira_issues(
+            project='TEST',
+            components='frontend'
+        )
         
-        assert 'components' in result
-        assert 'total_returned' in result
-        assert 'filters_applied' in result
-        assert result['filters_applied']['project'] == 'proj1'
+        # Verify SQL conditions were built correctly for component filters
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "LOWER(c.CNAME) LIKE '%frontend%'" in sql_call
+        assert "JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c" in sql_call
+        
+        # Verify filters_applied includes component filters
+        assert result['filters_applied']['components'] == 'frontend'
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_without_component_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues without component filters still includes component joins"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        result = await list_jira_issues(project='TEST')
+        
+        # Verify SQL ALWAYS includes component joins now
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c" in sql_call
+        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na" in sql_call
+        assert "i.PROJECT = 'TEST'" in sql_call  # Should always have table alias now
 
     @pytest.mark.asyncio
     @patch('tools.get_issue_links')
@@ -325,7 +342,7 @@ class TestRegisterTools:
         mock_get_links.return_value = {'123': [{'link_id': '456', 'type': 'blocks'}]}
         
         register_tools(mock_mcp)
-        get_jira_issue_links = mock_mcp._registered_tools[4]
+        get_jira_issue_links = mock_mcp._registered_tools[3]
         
         result = await get_jira_issue_links('TEST-1')
         
@@ -360,9 +377,9 @@ class TestRegisterTools:
         # Verify SQL conditions include default timeframe
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "CREATED >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
-        assert "UPDATED >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
-        assert "RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
+        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
+        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
+        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '30 DAYS'" in sql_call
         
         # Verify filters_applied includes default timeframe
         assert result['filters_applied']['timeframe'] == 30
@@ -381,9 +398,9 @@ class TestRegisterTools:
         # Verify SQL conditions include custom timeframe
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "CREATED >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
-        assert "UPDATED >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
-        assert "RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
+        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
+        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
+        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '7 DAYS'" in sql_call
         
         # Verify filters_applied includes custom timeframe
         assert result['filters_applied']['timeframe'] == 7
@@ -422,9 +439,9 @@ class TestRegisterTools:
         # Verify SQL conditions include large timeframe
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "CREATED >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
-        assert "UPDATED >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
-        assert "RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
+        assert "i.CREATED >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
+        assert "i.UPDATED >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
+        assert "i.RESOLUTIONDATE >= CURRENT_DATE() - INTERVAL '365 DAYS'" in sql_call
         
         # Verify filters_applied includes large timeframe
         assert result['filters_applied']['timeframe'] == 365
@@ -465,7 +482,9 @@ class TestConcurrentProcessingIntegration:
                 'DESCRIPTION': 'Full description', 'PRIORITY': 'High', 'ISSUESTATUS': 'Open',
                 'RESOLUTION': None, 'CREATED': '2024-01-01', 'UPDATED': '2024-01-02',
                 'DUEDATE': None, 'RESOLUTIONDATE': None, 'VOTES': 0, 'WATCHES': 0,
-                'ENVIRONMENT': 'test', 'COMPONENT': 'comp', 'FIXFOR': 'v1.0'
+                'ENVIRONMENT': 'test', 'COMPONENT': 'comp', 'FIXFOR': 'v1.0',
+                'COMPONENT_NAME': 'Test Component', 'COMPONENT_DESCRIPTION': 'Test Component Desc',
+                'COMPONENT_ARCHIVED': 'N', 'COMPONENT_DELETED': 'N'
             }
             yield {
                 'token': mock_token,
@@ -481,7 +500,8 @@ class TestConcurrentProcessingIntegration:
         # Setup mocks
         mock_concurrent_dependencies['query'].return_value = [
             ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Short desc", "Full description",
-             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0"]
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
+             "Test Component", "Test Component Desc", "N", "N"]
         ]
         
         mock_concurrent_dependencies['concurrent'].return_value = (
@@ -545,7 +565,8 @@ class TestConcurrentProcessingIntegration:
         # Setup mocks - concurrent processing fails
         mock_concurrent_dependencies['query'].return_value = [
             ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Short desc", "Full description",
-             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0"]
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
+             "Test Component", "Test Component Desc", "N", "N"]
         ]
         
         # Mock concurrent processing to return empty data (simulating exception handling)
@@ -571,7 +592,8 @@ class TestConcurrentProcessingIntegration:
         # Setup mocks
         mock_concurrent_dependencies['query'].return_value = [
             ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Short desc", "Full description",
-             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0"]
+             "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
+             "Test Component", "Test Component Desc", "N", "N"]
         ]
         
         # Mock concurrent processing returns empty results
