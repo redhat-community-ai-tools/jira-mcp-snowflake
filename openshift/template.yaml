@@ -75,11 +75,11 @@ objects:
             protocol: TCP
           resources:
             limits:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 200m
+              memory: 512Mi
             requests:
-              cpu: 50m
-              memory: 64Mi
+              cpu: 100m
+              memory: 256Mi
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
         dnsPolicy: ClusterFirst
