@@ -1,0 +1,91 @@
+---
+alwaysApply: true
+description: "Unit test coverage requirements for code changes"
+---
+
+# Unit Test Coverage Requirements
+
+## Mandatory Testing Workflow
+
+**CRITICAL**: When making ANY code changes in this project, you MUST follow this testing workflow:
+
+### 1. Before Making Changes
+- Run `make test` to establish baseline coverage
+- Note current coverage percentage from the terminal output
+
+### 2. After Making Changes
+- **ALWAYS** run `make test` immediately after any code modification
+- Check that all tests pass AND review coverage report
+- Coverage should be maintained or improved, never decreased
+
+### 3. Test Coverage Analysis
+When modifying files in [src/](mdc:src/), ensure corresponding test files exist and are updated:
+
+- `src/config.py` ↔ `tests/test_config.py`
+- `src/database.py` ↔ `tests/test_database.py` 
+- `src/mcp_server.py` ↔ `tests/test_mcp_server.py`
+- `src/metrics.py` ↔ `tests/test_metrics.py`
+- `src/tools.py` ↔ `tests/test_tools.py`
+
+### 4. When to Add/Remove Tests
+
+**Add tests when:**
+- Adding new functions, methods, or classes
+- Adding new code paths or branches (if/else, try/catch)
+- Adding new public APIs or tool functions
+- Adding new configuration options
+- Adding new error handling
+
+**Remove/update tests when:**
+- Removing deprecated functions or methods
+- Changing function signatures or behavior
+- Refactoring code that changes expected outputs
+- Removing features or functionality
+
+**Update tests when:**
+- Modifying existing function behavior
+- Changing return values or data structures
+- Adding new parameters to existing functions
+- Changing error handling or exception types
+
+### 5. Coverage Commands
+
+- **Full test suite**: `make test` (linting + pytest with coverage)
+- **Tests only**: `make pytest` or `uv run pytest tests/ --cov=src --cov-report=xml --cov-report=term -v --tb=short`
+- **Linting only**: `make lint` or `uv run flake8 src/ --max-line-length=120 --ignore=E501,W503`
+
+### 6. Coverage Standards
+
+- **Minimum**: Maintain existing coverage percentage
+- **Target**: Aim for >90% coverage on new code
+- **Critical**: Never commit code that reduces overall coverage
+- **Review**: Check coverage report output for uncovered lines
+
+### 7. Test Quality Requirements
+
+- Tests must cover both success and error scenarios
+- Include edge cases and boundary conditions
+- Mock external dependencies (database, HTTP calls)
+- Test async functions with proper async test setup
+- Verify error messages and exception types
+
+## Example Workflow
+
+```bash
+# Before changes
+make test  # Note coverage: e.g., "90% coverage"
+
+# Make your code changes
+# ... edit src/tools.py ...
+
+# After changes - MANDATORY
+make test  # Verify: tests pass + coverage maintained/improved
+
+# If coverage dropped, add tests:
+# ... edit tests/test_tools.py ...
+
+# Verify again
+make test  # Should show same or better coverage
+```
+
+**NEVER SKIP** the testing step - it's essential for code quality and preventing regressions.
