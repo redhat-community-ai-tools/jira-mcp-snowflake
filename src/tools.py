@@ -52,7 +52,7 @@ def register_tools(mcp: FastMCP) -> None:
         priority: Optional[str] = None,
         limit: int = 50,
         search_text: Optional[str] = None,
-        timeframe: int = 30,
+        timeframe: int = 0,
         components: Optional[str] = None,
         created_days: int = 0,
         updated_days: int = 0,
@@ -67,7 +67,7 @@ def register_tools(mcp: FastMCP) -> None:
             priority: Filter by priority ID
             limit: Maximum number of issues to return (default: 50)
             search_text: Search in summary and description fields
-            timeframe: Filter issues created within last N days (default: 30, for backward compatibility)
+            timeframe: Filter issues where ANY date (created, updated, or resolved) is within last N days (default: 0 = disabled)
             components: Search in component name and description fields
             created_days: Filter by creation date within last N days (overrides timeframe if > 0, default: 0 = disabled)
             updated_days: Filter by update date within last N days (default: 0 = disabled)
@@ -108,12 +108,9 @@ def register_tools(mcp: FastMCP) -> None:
             # Add date filters - specific date filters take precedence over general timeframe
             date_conditions = []
 
-            # Use specific created_days if provided, otherwise fall back to timeframe for backward compatibility
+            # Use specific created_days if provided
             if created_days > 0:
                 date_conditions.append(f"i.CREATED >= DATEADD(DAY, -{created_days}, CURRENT_TIMESTAMP())")
-            elif timeframe > 0:
-                # For backward compatibility, timeframe now only filters by creation date
-                date_conditions.append(f"i.CREATED >= DATEADD(DAY, -{timeframe}, CURRENT_TIMESTAMP())")
 
             if updated_days > 0:
                 date_conditions.append(f"i.UPDATED >= DATEADD(DAY, -{updated_days}, CURRENT_TIMESTAMP())")
@@ -121,8 +118,14 @@ def register_tools(mcp: FastMCP) -> None:
             if resolved_days > 0:
                 date_conditions.append(f"i.RESOLUTIONDATE >= DATEADD(DAY, -{resolved_days}, CURRENT_TIMESTAMP())")
 
+            # Apply timeframe filter if no specific date filters are provided and timeframe > 0
+            if timeframe > 0 and not date_conditions:
+                # Timeframe filters issues where ANY date (created, updated, or resolved) is within last N days
+                timeframe_condition = f"(i.CREATED >= DATEADD(DAY, -{timeframe}, CURRENT_TIMESTAMP()) OR i.UPDATED >= DATEADD(DAY, -{timeframe}, CURRENT_TIMESTAMP()) OR i.RESOLUTIONDATE >= DATEADD(DAY, -{timeframe}, CURRENT_TIMESTAMP()))"
+                sql_conditions.append(timeframe_condition)
+
             if date_conditions:
-                # All date conditions must be satisfied (AND logic)
+                # All specific date conditions must be satisfied (AND logic)
                 sql_conditions.extend(date_conditions)
 
             where_clause = ""
