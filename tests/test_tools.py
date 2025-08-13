@@ -227,8 +227,11 @@ class TestRegisterTools:
         register_tools(mock_mcp)
         get_jira_issue_details = mock_mcp._registered_tools[1]
         
-        result = await get_jira_issue_details('TEST-999')
-        assert result['error'] == "Issue with key 'TEST-999' not found"
+        result = await get_jira_issue_details(['TEST-999'])
+        assert result['found_issues'] == {}
+        assert result['not_found'] == ['TEST-999']
+        assert result['total_found'] == 0
+        assert result['total_requested'] == 1
 
     @pytest.mark.asyncio
     async def test_get_jira_issue_details_success(self, mock_mcp, mock_dependencies):
@@ -236,7 +239,7 @@ class TestRegisterTools:
         mock_dependencies['query'].return_value = [
             ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Full description',
              'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1',
-             None, None, None, '3600', '1800', '900', 'WF-1', None, 'N', None]
+             None, None, None, '3600', '1800', '900', 'WF-1', None, 'N', None, None, None, None, None]
         ]
         
         mock_dependencies['format'].return_value = {
@@ -247,7 +250,7 @@ class TestRegisterTools:
             'RESOLUTIONDATE': None, 'VOTES': '0', 'WATCHES': '1', 'ENVIRONMENT': None,
             'COMPONENT': None, 'FIXFOR': None, 'TIMEORIGINALESTIMATE': '3600',
             'TIMEESTIMATE': '1800', 'TIMESPENT': '900', 'WORKFLOW_ID': 'WF-1',
-            'SECURITY': None, 'ARCHIVED': 'N', 'ARCHIVEDDATE': None
+            'SECURITY': None, 'ARCHIVED': 'N', 'ARCHIVEDDATE': None, 'COMPONENT_NAME': None
         }
         
         mock_dependencies['enrichment'].return_value = (
@@ -259,13 +262,147 @@ class TestRegisterTools:
         register_tools(mock_mcp)
         get_jira_issue_details = mock_mcp._registered_tools[1]
         
-        result = await get_jira_issue_details('TEST-1')
+        result = await get_jira_issue_details(['TEST-1'])
         
-        assert result['key'] == 'TEST-1'
-        assert result['summary'] == 'Test Summary'
-        assert 'labels' in result
-        assert 'comments' in result
-        assert 'links' in result
+        assert result['found_issues']['TEST-1']['key'] == 'TEST-1'
+        assert result['found_issues']['TEST-1']['summary'] == 'Test Summary'
+        assert 'labels' in result['found_issues']['TEST-1']
+        assert 'comments' in result['found_issues']['TEST-1']
+        assert 'links' in result['found_issues']['TEST-1']
+        assert result['not_found'] == []
+        assert result['total_found'] == 1
+        assert result['total_requested'] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issue_details_multiple_issues_success(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issue_details with multiple valid issue keys"""
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary 1', 'Full description 1',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1',
+             None, None, None, '3600', '1800', '900', 'WF-1', None, 'N', None, None, None, None, None],
+            ['124', 'TEST-2', 'TEST', '2', 'Feature', 'Test Summary 2', 'Full description 2',
+             'Medium', 'In Progress', None, '2024-01-03', '2024-01-04', None, None, '1', '2',
+             None, None, None, '7200', '3600', '1800', 'WF-2', None, 'N', None, None, None, None, None]
+        ]
+        
+        def mock_format_side_effect(row, columns):
+            row_dict = dict(zip(columns, row))
+            return row_dict
+        
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+        
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['label1'], '124': ['label2', 'label3']},  # labels
+            {'123': [{'id': '789', 'body': 'Comment 1'}], '124': [{'id': '790', 'body': 'Comment 2'}]},  # comments
+            {'123': [{'link_id': '456'}], '124': [{'link_id': '457'}]}  # links
+        )
+        
+        register_tools(mock_mcp)
+        get_jira_issue_details = mock_mcp._registered_tools[1]
+        
+        result = await get_jira_issue_details(['TEST-1', 'TEST-2'])
+        
+        assert len(result['found_issues']) == 2
+        assert 'TEST-1' in result['found_issues']
+        assert 'TEST-2' in result['found_issues']
+        assert result['found_issues']['TEST-1']['summary'] == 'Test Summary 1'
+        assert result['found_issues']['TEST-2']['summary'] == 'Test Summary 2'
+        assert result['not_found'] == []
+        assert result['total_found'] == 2
+        assert result['total_requested'] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issue_details_mixed_results(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issue_details with some found and some not found issue keys"""
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1',
+             None, None, None, '3600', '1800', '900', 'WF-1', None, 'N', None, None, None, None, None]
+        ]
+        
+        def mock_format_side_effect(row, columns):
+            return dict(zip(columns, row))
+        
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+        
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['label1']},  # labels
+            {'123': [{'id': '789', 'body': 'Comment'}]},  # comments
+            {'123': [{'link_id': '456'}]}  # links
+        )
+        
+        register_tools(mock_mcp)
+        get_jira_issue_details = mock_mcp._registered_tools[1]
+        
+        result = await get_jira_issue_details(['TEST-1', 'TEST-999', 'TEST-998'])
+        
+        assert len(result['found_issues']) == 1
+        assert 'TEST-1' in result['found_issues']
+        assert result['found_issues']['TEST-1']['summary'] == 'Test Summary'
+        assert set(result['not_found']) == {'TEST-999', 'TEST-998'}
+        assert result['total_found'] == 1
+        assert result['total_requested'] == 3
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issue_details_all_not_found(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issue_details with multiple non-existent issue keys"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        get_jira_issue_details = mock_mcp._registered_tools[1]
+        
+        result = await get_jira_issue_details(['TEST-999', 'TEST-998', 'TEST-997'])
+        
+        assert result['found_issues'] == {}
+        assert set(result['not_found']) == {'TEST-999', 'TEST-998', 'TEST-997'}
+        assert result['total_found'] == 0
+        assert result['total_requested'] == 3
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issue_details_empty_list(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issue_details with an empty list input"""
+        register_tools(mock_mcp)
+        get_jira_issue_details = mock_mcp._registered_tools[1]
+        
+        result = await get_jira_issue_details([])
+        
+        assert result['found_issues'] == {}
+        assert result['not_found'] == []
+        assert result['total_found'] == 0
+        assert result['total_requested'] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issue_details_duplicate_keys(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issue_details with duplicate issue keys in the list"""
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1',
+             None, None, None, '3600', '1800', '900', 'WF-1', None, 'N', None, None, None, None, None]
+        ]
+        
+        def mock_format_side_effect(row, columns):
+            return dict(zip(columns, row))
+        
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+        
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['label1']},  # labels
+            {'123': [{'id': '789', 'body': 'Comment'}]},  # comments
+            {'123': [{'link_id': '456'}]}  # links
+        )
+        
+        register_tools(mock_mcp)
+        get_jira_issue_details = mock_mcp._registered_tools[1]
+        
+        result = await get_jira_issue_details(['TEST-1', 'TEST-1', 'TEST-1'])
+        
+        # Should only have one instance in found_issues despite duplicates
+        assert len(result['found_issues']) == 1
+        assert 'TEST-1' in result['found_issues']
+        assert result['found_issues']['TEST-1']['summary'] == 'Test Summary'
+        assert result['not_found'] == []
+        assert result['total_found'] == 1
+        assert result['total_requested'] == 3  # Still counts all requested
 
     @pytest.mark.asyncio
     async def test_get_jira_project_summary_success(self, mock_mcp, mock_dependencies):
@@ -675,7 +812,7 @@ class TestConcurrentProcessingIntegration:
         mock_concurrent_dependencies['query'].return_value = [
             ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Full description",
              "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
-             "8h", "4h", "2h", "workflow1", None, False, None]
+             "8h", "4h", "2h", "workflow1", None, False, None, None, None, None, None]
         ]
         
         mock_concurrent_dependencies['concurrent'].return_value = (
@@ -688,16 +825,19 @@ class TestConcurrentProcessingIntegration:
         get_jira_issue_details = mock_mcp_with_concurrent._registered_tools[1]
         
         # Execute the function
-        result = await get_jira_issue_details("TEST-1")
+        result = await get_jira_issue_details(["TEST-1"])
         
         # Verify concurrent processing was used
         mock_concurrent_dependencies['concurrent'].assert_called_once()
-        mock_concurrent_dependencies['track'].assert_called_with("single_issue_enrichment")
+        mock_concurrent_dependencies['track'].assert_called_with("multiple_issue_enrichment")
         
-        # Verify all enrichment data was added
-        assert result['labels'] == ["bug", "urgent"]
-        assert result['comments'] == [{"id": "c1", "body": "Test comment", "created": "2024-01-01"}]
-        assert result['links'] == [{"id": "l1", "type": "blocks"}]
+        # Verify all enrichment data was added to the found issue
+        assert result['found_issues']['TEST-1']['labels'] == ["bug", "urgent"]
+        assert result['found_issues']['TEST-1']['comments'] == [{"id": "c1", "body": "Test comment", "created": "2024-01-01"}]
+        assert result['found_issues']['TEST-1']['links'] == [{"id": "l1", "type": "blocks"}]
+        assert result['not_found'] == []
+        assert result['total_found'] == 1
+        assert result['total_requested'] == 1
 
     @pytest.mark.asyncio
     async def test_concurrent_processing_handles_exceptions(self, mock_mcp_with_concurrent, mock_concurrent_dependencies):
@@ -769,14 +909,14 @@ class TestConcurrentProcessingIntegration:
         mock_concurrent_dependencies['query'].return_value = [
             ["123", "TEST-1", "PROJECT", "1", "Bug", "Test issue", "Full description",
              "High", "Open", None, "2024-01-01", "2024-01-02", None, None, 0, 0, "test", "comp", "v1.0",
-             "8h", "4h", "2h", "workflow1", None, False, None]
+             "8h", "4h", "2h", "workflow1", None, False, None, None, None, None, None]
         ]
         
-        await get_jira_issue_details("TEST-1")
+        await get_jira_issue_details(["TEST-1"])
         
         # Verify tracking was called for both operation types
         expected_calls = [
             call("issue_enrichment"),
-            call("single_issue_enrichment")
+            call("multiple_issue_enrichment")
         ]
         mock_concurrent_dependencies['track'].assert_has_calls(expected_calls)

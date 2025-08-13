@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Optional, Dict
+from typing import Any, Optional, Dict, List
 
 from mcp.server.fastmcp import FastMCP
 
@@ -235,21 +235,34 @@ def register_tools(mcp: FastMCP) -> None:
 
     @mcp.tool()
     @track_tool_usage("get_jira_issue_details")
-    async def get_jira_issue_details(issue_key: str) -> Dict[str, Any]:
+    async def get_jira_issue_details(issue_keys: List[str]) -> Dict[str, Any]:
         """
-        Get detailed information for a specific JIRA issue by its key from Snowflake.
+        Get detailed information for multiple JIRA issues by their keys from Snowflake.
 
         Args:
-            issue_key: The JIRA issue key (e.g., 'SMQE-1280')
+            issue_keys: List of JIRA issue keys (e.g., ['SMQE-1280', 'SMQE-1281'])
 
         Returns:
-            Dictionary containing detailed issue information including comments
+            Dictionary containing detailed issue information including comments for all found issues
         """
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
             if not snowflake_token:
                 return {"error": "Snowflake token not available"}
+
+            # Validate input
+            if not issue_keys:
+                return {
+                    "found_issues": {},
+                    "not_found": [],
+                    "total_found": 0,
+                    "total_requested": 0
+                }
+
+            # Sanitize all issue keys and build IN clause
+            sanitized_keys = [f"'{sanitize_sql_value(key)}'" for key in issue_keys]
+            in_clause = f"({', '.join(sanitized_keys)})"
 
             sql = f"""
             SELECT DISTINCT
@@ -266,14 +279,11 @@ def register_tools(mcp: FastMCP) -> None:
                 AND na.ASSOCIATION_TYPE = 'IssueComponent'
             LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
                 ON na.SINK_NODE_ID = c.ID
-            WHERE i.ISSUE_KEY = '{sanitize_sql_value(issue_key)}'
-            LIMIT 1
+            WHERE i.ISSUE_KEY IN {in_clause}
+            ORDER BY i.ISSUE_KEY
             """
 
             rows = await execute_snowflake_query(sql, snowflake_token)
-
-            if not rows:
-                return {"error": f"Issue with key '{issue_key}' not found"}
 
             # Expected column order
             columns = [
@@ -285,50 +295,75 @@ def register_tools(mcp: FastMCP) -> None:
                 "COMPONENT_NAME", "COMPONENT_DESCRIPTION", "COMPONENT_ARCHIVED", "COMPONENT_DELETED"
             ]
 
-            row_dict = format_snowflake_row(rows[0], columns)
+            # Process all rows and track found issue keys
+            found_issues = {}
+            issue_ids = []
+            found_keys = set()
 
-            issue = {
-                "id": row_dict.get("ID"),
-                "key": row_dict.get("ISSUE_KEY"),
-                "project": row_dict.get("PROJECT"),
-                "issue_number": row_dict.get("ISSUENUM"),
-                "issue_type": row_dict.get("ISSUETYPE"),
-                "summary": row_dict.get("SUMMARY"),
-                "description": row_dict.get("DESCRIPTION", ""),
-                "priority": row_dict.get("PRIORITY"),
-                "status": row_dict.get("ISSUESTATUS"),
-                "resolution": row_dict.get("RESOLUTION"),
-                "created": row_dict.get("CREATED"),
-                "updated": row_dict.get("UPDATED"),
-                "due_date": row_dict.get("DUEDATE"),
-                "resolution_date": row_dict.get("RESOLUTIONDATE"),
-                "votes": row_dict.get("VOTES"),
-                "watches": row_dict.get("WATCHES"),
-                "environment": row_dict.get("ENVIRONMENT"),
-                "component": row_dict.get("COMPONENT"),
-                "fix_version": row_dict.get("FIXFOR"),
-                "time_original_estimate": row_dict.get("TIMEORIGINALESTIMATE"),
-                "time_estimate": row_dict.get("TIMEESTIMATE"),
-                "time_spent": row_dict.get("TIMESPENT"),
-                "workflow_id": row_dict.get("WORKFLOW_ID"),
-                "security": row_dict.get("SECURITY"),
-                "archived": row_dict.get("ARCHIVED"),
-                "archived_date": row_dict.get("ARCHIVEDDATE"),
-                "component_name": row_dict.get("COMPONENT_NAME"),
+            for row in rows:
+                row_dict = format_snowflake_row(row, columns)
+                issue_key = row_dict.get("ISSUE_KEY")
+                
+                if issue_key:
+                    found_keys.add(issue_key)
+                    
+                    issue = {
+                        "id": row_dict.get("ID"),
+                        "key": issue_key,
+                        "project": row_dict.get("PROJECT"),
+                        "issue_number": row_dict.get("ISSUENUM"),
+                        "issue_type": row_dict.get("ISSUETYPE"),
+                        "summary": row_dict.get("SUMMARY"),
+                        "description": row_dict.get("DESCRIPTION", ""),
+                        "priority": row_dict.get("PRIORITY"),
+                        "status": row_dict.get("ISSUESTATUS"),
+                        "resolution": row_dict.get("RESOLUTION"),
+                        "created": row_dict.get("CREATED"),
+                        "updated": row_dict.get("UPDATED"),
+                        "due_date": row_dict.get("DUEDATE"),
+                        "resolution_date": row_dict.get("RESOLUTIONDATE"),
+                        "votes": row_dict.get("VOTES"),
+                        "watches": row_dict.get("WATCHES"),
+                        "environment": row_dict.get("ENVIRONMENT"),
+                        "component": row_dict.get("COMPONENT"),
+                        "fix_version": row_dict.get("FIXFOR"),
+                        "time_original_estimate": row_dict.get("TIMEORIGINALESTIMATE"),
+                        "time_estimate": row_dict.get("TIMEESTIMATE"),
+                        "time_spent": row_dict.get("TIMESPENT"),
+                        "workflow_id": row_dict.get("WORKFLOW_ID"),
+                        "security": row_dict.get("SECURITY"),
+                        "archived": row_dict.get("ARCHIVED"),
+                        "archived_date": row_dict.get("ARCHIVEDDATE"),
+                        "component_name": row_dict.get("COMPONENT_NAME"),
+                    }
+                    
+                    found_issues[issue_key] = issue
+                    if row_dict.get("ID"):
+                        issue_ids.append(str(row_dict.get("ID")))
+
+            # Determine which keys were not found
+            not_found_keys = [key for key in issue_keys if key not in found_keys]
+
+            # Get labels, comments, and links concurrently for all found issues
+            if issue_ids:
+                track_concurrent_operation("multiple_issue_enrichment")
+                labels_data, comments_data, links_data = await get_issue_enrichment_data_concurrent(
+                    issue_ids, snowflake_token
+                )
+
+                # Enrich each issue with labels, comments, and links
+                for issue_key, issue in found_issues.items():
+                    issue_id = str(issue['id'])
+                    issue['labels'] = labels_data.get(issue_id, [])
+                    issue['comments'] = comments_data.get(issue_id, [])
+                    issue['links'] = links_data.get(issue_id, [])
+
+            return {
+                "found_issues": found_issues,
+                "not_found": not_found_keys,
+                "total_found": len(found_issues),
+                "total_requested": len(issue_keys)
             }
-
-            # Get labels, comments, and links concurrently for this issue
-            track_concurrent_operation("single_issue_enrichment")
-            labels_data, comments_data, links_data = await get_issue_enrichment_data_concurrent(
-                [str(issue['id'])], snowflake_token
-            )
-
-            issue_id = str(issue['id'])
-            issue['labels'] = labels_data.get(issue_id, [])
-            issue['comments'] = comments_data.get(issue_id, [])
-            issue['links'] = links_data.get(issue_id, [])
-
-            return issue
 
         except Exception as e:
             return {"error": f"Error reading issue details from Snowflake: {str(e)}"}
