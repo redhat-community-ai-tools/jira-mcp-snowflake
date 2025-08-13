@@ -303,10 +303,10 @@ def register_tools(mcp: FastMCP) -> None:
             for row in rows:
                 row_dict = format_snowflake_row(row, columns)
                 issue_key = row_dict.get("ISSUE_KEY")
-                
+
                 if issue_key:
                     found_keys.add(issue_key)
-                    
+
                     issue = {
                         "id": row_dict.get("ID"),
                         "key": issue_key,
@@ -336,7 +336,7 @@ def register_tools(mcp: FastMCP) -> None:
                         "archived_date": row_dict.get("ARCHIVEDDATE"),
                         "component_name": row_dict.get("COMPONENT_NAME"),
                     }
-                    
+
                     found_issues[issue_key] = issue
                     if row_dict.get("ID"):
                         issue_ids.append(str(row_dict.get("ID")))
