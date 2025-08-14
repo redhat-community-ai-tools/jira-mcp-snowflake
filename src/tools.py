@@ -68,7 +68,7 @@ def register_tools(mcp: FastMCP) -> None:
             limit: Maximum number of issues to return (default: 50)
             search_text: Search in summary and description fields
             timeframe: Filter issues where ANY date (created, updated, or resolved) is within last N days (default: 0 = disabled)
-            components: Search in component name and description fields
+            components: Comma-separated list; match ANY in component name
             created_days: Filter by creation date within last N days (overrides timeframe if > 0, default: 0 = disabled)
             updated_days: Filter by update date within last N days (default: 0 = disabled)
             resolved_days: Filter by resolution date within last N days (default: 0 = disabled)
@@ -102,8 +102,19 @@ def register_tools(mcp: FastMCP) -> None:
                 sql_conditions.append(search_condition)
 
             if components:
-                components_condition = f"(LOWER(c.CNAME) LIKE '%{sanitize_sql_value(components.lower())}%' OR LOWER(c.DESCRIPTION) LIKE '%{sanitize_sql_value(components.lower())}%')"
-                sql_conditions.append(components_condition)
+                # Support comma-separated component filters (match ANY)
+                component_terms = [
+                    term.strip().lower() for term in components.split(",") if term.strip()
+                ]
+                if component_terms:
+                    per_term_conditions = []
+                    for term in component_terms:
+                        safe_term = sanitize_sql_value(term)
+                        per_term_conditions.append(
+                            f"(LOWER(c.CNAME) LIKE '%{safe_term}%' OR LOWER(c.DESCRIPTION) LIKE '%{safe_term}%')"
+                        )
+                    components_condition = "(" + " OR ".join(per_term_conditions) + ")"
+                    sql_conditions.append(components_condition)
 
             # Add date filters - specific date filters take precedence over general timeframe
             date_conditions = []
@@ -140,14 +151,23 @@ def register_tools(mcp: FastMCP) -> None:
                 i.DESCRIPTION, i.PRIORITY, i.ISSUESTATUS, i.RESOLUTION,
                 i.CREATED, i.UPDATED, i.DUEDATE, i.RESOLUTIONDATE,
                 i.VOTES, i.WATCHES, i.ENVIRONMENT, i.COMPONENT, i.FIXFOR,
-                c.CNAME as COMPONENT_NAME, c.DESCRIPTION as COMPONENT_DESCRIPTION,
-                c.ARCHIVED as COMPONENT_ARCHIVED, c.DELETED as COMPONENT_DELETED
+                compagg.COMPONENT_NAMES
             FROM JIRA_ISSUE_NON_PII i
             LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
                 ON i.ID = na.SOURCE_NODE_ID
                 AND na.ASSOCIATION_TYPE = 'IssueComponent'
             LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
                 ON na.SINK_NODE_ID = c.ID
+            LEFT JOIN (
+                SELECT
+                    na2.SOURCE_NODE_ID AS ISSUE_ID,
+                    LISTAGG(DISTINCT c2.CNAME, '||') WITHIN GROUP (ORDER BY c2.CNAME) AS COMPONENT_NAMES
+                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na2
+                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c2
+                    ON na2.SINK_NODE_ID = c2.ID
+                WHERE na2.ASSOCIATION_TYPE = 'IssueComponent'
+                GROUP BY na2.SOURCE_NODE_ID
+            ) compagg ON compagg.ISSUE_ID = i.ID
             {where_clause}
             ORDER BY i.CREATED DESC
             LIMIT {limit}
@@ -155,8 +175,9 @@ def register_tools(mcp: FastMCP) -> None:
 
             rows = await execute_snowflake_query(sql, snowflake_token)
 
-            issues = []
-            issue_ids = []
+            # Aggregate rows by unique issue to avoid duplicates when there are multiple components
+            issues_by_id: Dict[str, Dict[str, Any]] = {}
+            issue_ids: List[str] = []
 
             # Expected column order based on SELECT statement
             columns = [
@@ -164,39 +185,57 @@ def register_tools(mcp: FastMCP) -> None:
                 "DESCRIPTION_TRUNCATED", "DESCRIPTION", "PRIORITY", "ISSUESTATUS",
                 "RESOLUTION", "CREATED", "UPDATED", "DUEDATE", "RESOLUTIONDATE",
                 "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR",
-                "COMPONENT_NAME", "COMPONENT_DESCRIPTION", "COMPONENT_ARCHIVED", "COMPONENT_DELETED"
+                "COMPONENT_NAMES"
             ]
 
             for row in rows:
                 row_dict = format_snowflake_row(row, columns)
 
-                # Build issue object
-                issue = {
-                    "id": row_dict.get("ID"),
-                    "key": row_dict.get("ISSUE_KEY"),
-                    "project": row_dict.get("PROJECT"),
-                    "issue_number": row_dict.get("ISSUENUM"),
-                    "issue_type": row_dict.get("ISSUETYPE"),
-                    "summary": row_dict.get("SUMMARY"),
-                    "description": row_dict.get("DESCRIPTION_TRUNCATED") or "",
-                    "priority": row_dict.get("PRIORITY"),
-                    "status": row_dict.get("ISSUESTATUS"),
-                    "resolution": row_dict.get("RESOLUTION"),
-                    "created": row_dict.get("CREATED"),
-                    "updated": row_dict.get("UPDATED"),
-                    "due_date": row_dict.get("DUEDATE"),
-                    "resolution_date": row_dict.get("RESOLUTIONDATE"),
-                    "votes": row_dict.get("VOTES"),
-                    "watches": row_dict.get("WATCHES"),
-                    "environment": row_dict.get("ENVIRONMENT"),
-                    "component": row_dict.get("COMPONENT"),
-                    "fix_version": row_dict.get("FIXFOR"),
-                    "component_name": row_dict.get("COMPONENT_NAME"),
-                }
+                issue_id = row_dict.get("ID")
+                if issue_id is None:
+                    # Skip malformed rows
+                    continue
 
-                issues.append(issue)
-                if row_dict.get("ID"):
-                    issue_ids.append(str(row_dict.get("ID")))
+                issue_id_str = str(issue_id)
+
+                if issue_id_str not in issues_by_id:
+                    # Initialize new issue entry
+                    issues_by_id[issue_id_str] = {
+                        "id": row_dict.get("ID"),
+                        "key": row_dict.get("ISSUE_KEY"),
+                        "project": row_dict.get("PROJECT"),
+                        "issue_number": row_dict.get("ISSUENUM"),
+                        "issue_type": row_dict.get("ISSUETYPE"),
+                        "summary": row_dict.get("SUMMARY"),
+                        "description": row_dict.get("DESCRIPTION_TRUNCATED") or "",
+                        "priority": row_dict.get("PRIORITY"),
+                        "status": row_dict.get("ISSUESTATUS"),
+                        "resolution": row_dict.get("RESOLUTION"),
+                        "created": row_dict.get("CREATED"),
+                        "updated": row_dict.get("UPDATED"),
+                        "due_date": row_dict.get("DUEDATE"),
+                        "resolution_date": row_dict.get("RESOLUTIONDATE"),
+                        "votes": row_dict.get("VOTES"),
+                        "watches": row_dict.get("WATCHES"),
+                        "environment": row_dict.get("ENVIRONMENT"),
+                        # Expose full list of component names for the issue
+                        "component": [],
+                        "fix_version": row_dict.get("FIXFOR"),
+                        # For backwards-compatibility, keep a single representative component_name if desired
+                        "component_name": None,
+                    }
+                    issue_ids.append(issue_id_str)
+
+                # Aggregate component names from the precomputed aggregation string
+                comp_names_str = row_dict.get("COMPONENT_NAMES") or ""
+                if comp_names_str:
+                    current_components = issues_by_id[issue_id_str]["component"]
+                    # Split and add uniquely while preserving order
+                    for name in [n.strip() for n in comp_names_str.split("||") if n and n.strip()]:
+                        if name not in current_components:
+                            current_components.append(name)
+                    # Set a representative component_name for compatibility (first in list)
+                    issues_by_id[issue_id_str]["component_name"] = current_components[0] if current_components else None
 
             # Get labels, comments, and links concurrently for better performance
             track_concurrent_operation("issue_enrichment")
@@ -205,6 +244,7 @@ def register_tools(mcp: FastMCP) -> None:
             )
 
             # Enrich issues with labels and links
+            issues = list(issues_by_id.values())
             for issue in issues:
                 issue_id = str(issue['id'])
                 issue['labels'] = labels_data.get(issue_id, [])

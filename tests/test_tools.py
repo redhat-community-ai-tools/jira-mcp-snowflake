@@ -469,6 +469,56 @@ class TestRegisterTools:
         assert "i.PROJECT = 'TEST'" in sql_call  # Should always have table alias now
 
     @pytest.mark.asyncio
+    async def test_list_jira_issues_with_multiple_component_filters_sql(self, mock_mcp, mock_dependencies):
+        """Builds OR conditions for multiple component filters (generic names)"""
+        mock_dependencies['query'].return_value = []
+
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+
+        components = 'frontend, backend'
+        await list_jira_issues(project='PROJECT', issue_type='1', status='Open', components=components)
+
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "LOWER(c.CNAME) LIKE '%frontend%'" in sql_call
+        assert "LOWER(c.DESCRIPTION) LIKE '%frontend%'" in sql_call
+        assert "LOWER(c.CNAME) LIKE '%backend%'" in sql_call
+        assert "LOWER(c.DESCRIPTION) LIKE '%backend%'" in sql_call
+        assert " OR " in sql_call
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_component_aggregation_dedup(self, mock_mcp, mock_dependencies):
+        """De-duplicates issues and aggregates components into a unique list (generic names)"""
+        # Two rows for same issue id (simulating duplicates from joins)
+        mock_dependencies['query'].return_value = [
+            ['123', 'PROJ-9282', 'frontend||backend'],
+            ['123', 'PROJ-9282', 'frontend||backend'],
+        ]
+
+        # Map minimal fields regardless of the internal columns list
+        def mock_format_side_effect(row, columns):
+            # Only provide fields used by aggregation logic
+            return {
+                'ID': row[0],
+                'ISSUE_KEY': row[1],
+                'COMPONENT_NAMES': row[2],
+            }
+
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+
+        result = await list_jira_issues(project='PROJ', issue_type='1', status='Open', components='frontend, backend')
+
+        assert result['total_returned'] == 1
+        assert len(result['issues']) == 1
+        issue = result['issues'][0]
+        assert issue['component'] == ['frontend', 'backend']
+        assert issue['component_name'] == 'frontend'
+
+    @pytest.mark.asyncio
     @patch('tools.get_issue_links')
     async def test_get_jira_issue_links_success(self, mock_get_links, mock_mcp, mock_dependencies):
         """Test successful get_jira_issue_links execution"""
@@ -527,7 +577,7 @@ class TestRegisterTools:
         list_jira_issues = mock_mcp._registered_tools[0]
         
         # Test with custom timeframe
-        result = await list_jira_issues(project='KONFLUX', timeframe=7)
+        result = await list_jira_issues(project='PROJECT', timeframe=7)
         
         # Verify SQL conditions include custom timeframe (filters by ANY date: created, updated, or resolved)
         mock_dependencies['query'].assert_called_once()
