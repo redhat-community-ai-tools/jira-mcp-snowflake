@@ -1,5 +1,6 @@
 FROM registry.redhat.io/ubi9/python-311
 
+LABEL konflux.additional-tags="latest"
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
 
