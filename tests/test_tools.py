@@ -519,6 +519,26 @@ class TestRegisterTools:
         assert issue['component_name'] == 'frontend'
 
     @pytest.mark.asyncio
+    async def test_list_jira_issues_skips_rows_with_missing_id(self, mock_mcp, mock_dependencies):
+        """Ensure rows with missing ID are safely skipped (branch coverage for continue)."""
+        # One row returned, but formatted row has ID=None to trigger skip
+        mock_dependencies['query'].return_value = [["ignored"]]
+
+        def mock_format_side_effect(row, columns):
+            return {"ID": None}
+
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+
+        result = await list_jira_issues(project='TEST')
+
+        # No issues should be returned; path with `continue` is exercised
+        assert result['total_returned'] == 0
+        assert result['issues'] == []
+
+    @pytest.mark.asyncio
     @patch('tools.get_issue_links')
     async def test_get_jira_issue_links_success(self, mock_get_links, mock_mcp, mock_dependencies):
         """Test successful get_jira_issue_links execution"""
