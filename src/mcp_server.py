@@ -30,7 +30,7 @@ async def async_cleanup():
 def main():
     """Main entry point for the MCP server"""
     # Initialize FastMCP server
-    mcp = FastMCP("jira-mcp-snowflake")
+    mcp = FastMCP("jira-mcp-snowflake", host="0.0.0.0")
 
     # Register all tools
     register_tools(mcp)
