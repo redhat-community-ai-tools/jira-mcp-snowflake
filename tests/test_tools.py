@@ -135,8 +135,9 @@ class TestRegisterTools:
         assert len(mock_mcp._registered_tools) == 4
 
     @pytest.mark.asyncio
-    async def test_list_jira_issues_no_token(self, mock_mcp, mock_dependencies):
-        """Test list_jira_issues when no token is available"""
+    @patch('tools.SNOWFLAKE_AUTH_METHOD', 'token')
+    async def test_list_jira_issues_no_token_for_token_auth(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues when no token is available for token-based authentication"""
         mock_dependencies['token'].return_value = None
         
         register_tools(mock_mcp)
@@ -145,7 +146,53 @@ class TestRegisterTools:
         list_jira_issues = mock_mcp._registered_tools[0]
         
         result = await list_jira_issues()
-        assert result['error'] == "Snowflake token not available"
+        # Should return "no snowflake token" error for token auth
+        assert 'error' in result
+        assert 'No Snowflake token available' in result['error']
+        assert result['issues'] == []
+
+    @pytest.mark.asyncio
+    @patch('tools.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('tools.get_auth_token')
+    async def test_list_jira_issues_jwt_token_failure(self, mock_get_auth_token, mock_mcp, mock_dependencies):
+        """Test list_jira_issues when JWT token generation fails for private key auth"""
+        mock_dependencies['token'].return_value = None
+        # Mock JWT token generation failure
+        mock_get_auth_token.side_effect = Exception("Invalid private key format")
+        
+        register_tools(mock_mcp)
+        
+        # Get the registered function
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        result = await list_jira_issues()
+        # Should return specific JWT token error
+        assert 'error' in result
+        assert 'JWT token error' in result['error']
+        assert 'Invalid private key format' in result['error']
+        assert result['issues'] == []
+
+    @pytest.mark.asyncio
+    @patch('tools.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('tools.get_auth_token')
+    async def test_list_jira_issues_auth_failure_private_key(self, mock_get_auth_token, mock_mcp, mock_dependencies):
+        """Test list_jira_issues when private key authentication fails at database layer"""
+        from database import SnowflakeAuthenticationError
+        
+        mock_dependencies['token'].return_value = None
+        # Mock JWT validation to succeed, but database query to fail
+        mock_get_auth_token.return_value = "valid_jwt_token"
+        mock_dependencies['query'].side_effect = SnowflakeAuthenticationError("Invalid credentials")
+        
+        register_tools(mock_mcp)
+        
+        # Get the registered function
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        result = await list_jira_issues()
+        # Should return simplified authentication error
+        assert 'error' in result
+        assert result['error'] == "Authentication failed: Invalid or expired token"
         assert result['issues'] == []
 
     @pytest.mark.asyncio

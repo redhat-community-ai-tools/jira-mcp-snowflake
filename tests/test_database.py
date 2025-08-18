@@ -25,7 +25,15 @@ from database import (  # noqa: E402
     get_from_cache,
     set_in_cache,
     clear_cache,
-    cleanup_resources
+    cleanup_resources,
+    load_private_key,
+    generate_jwt_token,
+    get_auth_token,
+    SnowflakeAuthenticationError,
+    is_jwt_token_expired,
+    get_cached_jwt_token,
+    cache_jwt_token,
+    clear_jwt_token_cache
 )
 
 
@@ -91,8 +99,9 @@ class TestMakeSnowflakeRequest:
     @patch('database.SNOWFLAKE_BASE_URL', 'https://test.snowflake.com')
     async def test_missing_token(self):
         """Test request with missing token"""
-        result = await make_snowflake_request("endpoint", "POST", {"test": "data"})
-        assert result is None
+        with pytest.raises(SnowflakeAuthenticationError) as exc_info:
+            await make_snowflake_request("endpoint", "POST", {"test": "data"})
+        assert "Authentication token could not be obtained" in str(exc_info.value)
 
     @pytest.mark.asyncio
     @patch('database.SNOWFLAKE_TOKEN', 'default_token')
@@ -961,3 +970,478 @@ class TestConcurrentFunctions:
         """Test concurrent row formatting with empty input"""
         result = await format_snowflake_rows_concurrent([], ["col1", "col2"])
         assert result == []
+
+
+class TestPrivateKeyAuthentication:
+    """Test cases for private key authentication functions"""
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('builtins.open', MagicMock())
+    @patch('cryptography.hazmat.primitives.serialization.load_pem_private_key')
+    def test_load_private_key_success(self, mock_load_key):
+        """Test successful private key loading"""
+        # Mock private key
+        mock_private_key = MagicMock()
+        mock_pem_bytes = b"-----BEGIN PRIVATE KEY-----\nMOCK_KEY\n-----END PRIVATE KEY-----"
+        mock_private_key.private_bytes.return_value = mock_pem_bytes
+        mock_load_key.return_value = mock_private_key
+
+        # Mock file reading
+        mock_file_data = b"mock_key_data"
+        with patch('builtins.open', lambda path, mode: MagicMock(__enter__=lambda self: MagicMock(read=lambda: mock_file_data), __exit__=lambda *args: None)):
+            result = load_private_key("/path/to/key.pem", "passphrase")
+
+        assert result == mock_pem_bytes
+        mock_load_key.assert_called_once_with(mock_file_data, password=b"passphrase")
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('builtins.open', MagicMock())
+    @patch('cryptography.hazmat.primitives.serialization.load_pem_private_key')
+    def test_load_private_key_without_passphrase(self, mock_load_key):
+        """Test private key loading without passphrase"""
+        mock_private_key = MagicMock()
+        mock_pem_bytes = b"-----BEGIN PRIVATE KEY-----\nMOCK_KEY\n-----END PRIVATE KEY-----"
+        mock_private_key.private_bytes.return_value = mock_pem_bytes
+        mock_load_key.return_value = mock_private_key
+
+        mock_file_data = b"mock_key_data"
+        with patch('builtins.open', lambda path, mode: MagicMock(__enter__=lambda self: MagicMock(read=lambda: mock_file_data), __exit__=lambda *args: None)):
+            result = load_private_key("/path/to/key.pem")
+
+        assert result == mock_pem_bytes
+        mock_load_key.assert_called_once_with(mock_file_data, password=None)
+
+    @patch('database.JWT_AVAILABLE', False)
+    def test_load_private_key_jwt_not_available(self):
+        """Test private key loading when JWT is not available"""
+        with pytest.raises(ImportError) as exc_info:
+            load_private_key("/path/to/key.pem")
+        
+        assert "JWT and cryptography libraries are required" in str(exc_info.value)
+
+    @patch('database.JWT_AVAILABLE', True)
+    def test_load_private_key_file_not_found(self):
+        """Test private key loading when file doesn't exist"""
+        with patch('builtins.open', side_effect=FileNotFoundError("File not found")):
+            with pytest.raises(FileNotFoundError):
+                load_private_key("/nonexistent/key.pem")
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('builtins.open', MagicMock())
+    @patch('cryptography.hazmat.primitives.serialization.load_pem_private_key')
+    def test_load_private_key_invalid_key(self, mock_load_key):
+        """Test private key loading with invalid key"""
+        mock_load_key.side_effect = Exception("Invalid key format")
+
+        mock_file_data = b"invalid_key_data"
+        with patch('builtins.open', lambda path, mode: MagicMock(__enter__=lambda self: MagicMock(read=lambda: mock_file_data), __exit__=lambda *args: None)):
+            with pytest.raises(ValueError) as exc_info:
+                load_private_key("/path/to/invalid_key.pem")
+        
+        assert "Unable to load private key" in str(exc_info.value)
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('database.load_private_key')
+    @patch('jwt.encode')
+    @patch('database.uuid.uuid4')
+    def test_generate_jwt_token_success(self, mock_uuid, mock_jwt_encode, mock_load_key):
+        """Test successful JWT token generation"""
+        # Mock dependencies
+        mock_private_key = b"mock_private_key"
+        mock_load_key.return_value = mock_private_key
+        mock_jwt_encode.return_value = "mock_jwt_token"
+        mock_uuid.return_value = MagicMock(__str__=lambda self: "mock-uuid")
+
+        result = generate_jwt_token("test_user", "/path/to/key.pem", "passphrase")
+
+        assert result == "mock_jwt_token"
+        mock_load_key.assert_called_once_with("/path/to/key.pem", "passphrase")
+        mock_jwt_encode.assert_called_once()
+        
+        # Check JWT payload structure
+        call_args = mock_jwt_encode.call_args
+        payload = call_args[0][0]
+        assert payload['iss'] == "test_user.SNOWFLAKE"
+        assert payload['sub'] == "test_user.SNOWFLAKE"
+        assert 'iat' in payload
+        assert 'exp' in payload
+        assert 'jti' in payload
+
+    @patch('database.JWT_AVAILABLE', False)
+    def test_generate_jwt_token_jwt_not_available(self):
+        """Test JWT token generation when JWT is not available"""
+        with pytest.raises(ImportError) as exc_info:
+            generate_jwt_token("test_user", "/path/to/key.pem")
+        
+        assert "JWT and cryptography libraries are required" in str(exc_info.value)
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('database.load_private_key')
+    def test_generate_jwt_token_key_load_error(self, mock_load_key):
+        """Test JWT token generation when key loading fails"""
+        mock_load_key.side_effect = Exception("Key loading failed")
+
+        with pytest.raises(ValueError) as exc_info:
+            generate_jwt_token("test_user", "/path/to/key.pem")
+        
+        assert "Unable to generate JWT token" in str(exc_info.value)
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'token')
+    @patch('database.SNOWFLAKE_TOKEN', 'test_token')
+    def test_get_auth_token_with_explicit_token(self):
+        """Test get_auth_token with explicitly provided token"""
+        result = get_auth_token("explicit_token")
+        assert result == "explicit_token"
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'token')
+    @patch('database.SNOWFLAKE_TOKEN', 'configured_token')
+    def test_get_auth_token_token_method(self):
+        """Test get_auth_token with token authentication method"""
+        result = get_auth_token()
+        assert result == "configured_token"
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('database.SNOWFLAKE_USERNAME', 'test_user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PATH', '/path/to/key.pem')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', 'passphrase')
+    @patch('database.generate_jwt_token')
+    def test_get_auth_token_private_key_method(self, mock_generate_jwt):
+        """Test get_auth_token with private key authentication method"""
+        mock_generate_jwt.return_value = "jwt_token"
+
+        result = get_auth_token()
+
+        assert result == "jwt_token"
+        mock_generate_jwt.assert_called_once_with('test_user', '/path/to/key.pem', 'passphrase')
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('database.SNOWFLAKE_USERNAME', None)
+    def test_get_auth_token_private_key_missing_username(self):
+        """Test get_auth_token with private key method but missing username"""
+        with pytest.raises(ValueError) as exc_info:
+            get_auth_token()
+        
+        assert "SNOWFLAKE_USERNAME is required" in str(exc_info.value)
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('database.SNOWFLAKE_USERNAME', 'test_user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PATH', None)
+    def test_get_auth_token_private_key_missing_path(self):
+        """Test get_auth_token with private key method but missing key path"""
+        with pytest.raises(ValueError) as exc_info:
+            get_auth_token()
+        
+        assert "SNOWFLAKE_PRIVATE_KEY_PATH is required" in str(exc_info.value)
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'invalid_method')
+    def test_get_auth_token_invalid_method(self):
+        """Test get_auth_token with invalid authentication method"""
+        with pytest.raises(ValueError) as exc_info:
+            get_auth_token()
+        
+        assert "Invalid SNOWFLAKE_AUTH_METHOD: invalid_method" in str(exc_info.value)
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('database.SNOWFLAKE_USERNAME', 'test_user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PATH', '/path/to/key.pem')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', None)
+    @patch('database.generate_jwt_token')
+    def test_get_auth_token_private_key_no_passphrase(self, mock_generate_jwt):
+        """Test get_auth_token with private key method and no passphrase"""
+        mock_generate_jwt.return_value = "jwt_token"
+
+        result = get_auth_token()
+
+        assert result == "jwt_token"
+        mock_generate_jwt.assert_called_once_with('test_user', '/path/to/key.pem', None)
+
+
+class TestMakeSnowflakeRequestWithPrivateKey:
+    """Test cases for make_snowflake_request with private key authentication"""
+
+    @pytest.mark.asyncio
+    @patch('database.get_auth_token')
+    @patch('database.SNOWFLAKE_BASE_URL', 'https://test.snowflake.com')
+    @patch('database.httpx.AsyncClient')
+    async def test_make_request_with_private_key_auth(self, mock_client_class, mock_get_auth_token):
+        """Test make_snowflake_request with private key authentication"""
+        # Mock auth token generation
+        mock_get_auth_token.return_value = "jwt_token"
+
+        # Mock HTTP response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": []}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.request = AsyncMock(return_value=mock_response)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client_instance
+
+        result = await make_snowflake_request("endpoint", "POST", {"test": "data"})
+
+        assert result == {"data": []}
+        
+        # Verify the JWT token was used in Authorization header
+        args, kwargs = mock_client_instance.request.call_args
+        headers = kwargs['headers']
+        assert headers['Authorization'] == 'Bearer jwt_token'
+        
+        mock_get_auth_token.assert_called_once_with(None)
+
+    @pytest.mark.asyncio
+    @patch('database.get_auth_token')
+    async def test_make_request_auth_token_generation_failure(self, mock_get_auth_token):
+        """Test make_snowflake_request when auth token generation fails"""
+        mock_get_auth_token.side_effect = Exception("JWT generation failed")
+
+        with pytest.raises(SnowflakeAuthenticationError) as exc_info:
+            await make_snowflake_request("endpoint", "POST", {"test": "data"})
+        
+        assert "Authentication failed: JWT generation failed" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @patch('database.get_auth_token')
+    async def test_make_request_auth_token_none(self, mock_get_auth_token):
+        """Test make_snowflake_request when auth token is None"""
+        mock_get_auth_token.return_value = None
+
+        with pytest.raises(SnowflakeAuthenticationError) as exc_info:
+            await make_snowflake_request("endpoint", "POST", {"test": "data"})
+        
+        assert "Authentication token could not be obtained" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @patch('database.get_auth_token')
+    @patch('database.SNOWFLAKE_BASE_URL', 'https://test.snowflake.com')
+    @patch('database.httpx.AsyncClient')
+    async def test_make_request_with_provided_token_override(self, mock_client_class, mock_get_auth_token):
+        """Test that provided token overrides auth method"""
+        # Mock auth token generation (should not be called for the actual auth)
+        mock_get_auth_token.return_value = "provided_token"
+
+        # Mock HTTP response
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"data": []}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client_instance = AsyncMock()
+        mock_client_instance.request = AsyncMock(return_value=mock_response)
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=None)
+        mock_client_class.return_value = mock_client_instance
+
+        result = await make_snowflake_request("endpoint", "POST", {"test": "data"}, "provided_token")
+
+        assert result == {"data": []}
+        
+        # Verify the provided token was used
+        args, kwargs = mock_client_instance.request.call_args
+        headers = kwargs['headers']
+        assert headers['Authorization'] == 'Bearer provided_token'
+        
+        # Verify get_auth_token was called with the provided token
+        mock_get_auth_token.assert_called_once_with("provided_token")
+
+
+class TestJWTTokenCaching:
+    """Test cases for JWT token caching functionality"""
+
+    def setup_method(self):
+        """Clear token cache before each test"""
+        clear_jwt_token_cache()
+
+    def teardown_method(self):
+        """Clear token cache after each test"""
+        clear_jwt_token_cache()
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('jwt.decode')
+    def test_is_jwt_token_expired_valid_token(self, mock_jwt_decode):
+        """Test JWT token expiration check for valid token"""
+        from datetime import datetime, timezone, timedelta
+        
+        # Mock token that expires in 30 minutes
+        future_exp = int((datetime.now(timezone.utc) + timedelta(minutes=30)).timestamp())
+        mock_jwt_decode.return_value = {'exp': future_exp}
+        
+        result = is_jwt_token_expired("valid_token")
+        assert result is False
+        mock_jwt_decode.assert_called_once_with("valid_token", options={"verify_signature": False})
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('jwt.decode')
+    def test_is_jwt_token_expired_expired_token(self, mock_jwt_decode):
+        """Test JWT token expiration check for expired token"""
+        from datetime import datetime, timezone, timedelta
+        
+        # Mock token that expired 10 minutes ago
+        past_exp = int((datetime.now(timezone.utc) - timedelta(minutes=10)).timestamp())
+        mock_jwt_decode.return_value = {'exp': past_exp}
+        
+        result = is_jwt_token_expired("expired_token")
+        assert result is True
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('jwt.decode')
+    def test_is_jwt_token_expired_soon_to_expire(self, mock_jwt_decode):
+        """Test JWT token expiration check for token expiring soon"""
+        from datetime import datetime, timezone, timedelta
+        
+        # Mock token that expires in 2 minutes (less than 5-minute buffer)
+        soon_exp = int((datetime.now(timezone.utc) + timedelta(minutes=2)).timestamp())
+        mock_jwt_decode.return_value = {'exp': soon_exp}
+        
+        result = is_jwt_token_expired("soon_to_expire_token")
+        assert result is True  # Should be considered expired due to buffer
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('jwt.decode')
+    def test_is_jwt_token_expired_no_exp_claim(self, mock_jwt_decode):
+        """Test JWT token expiration check for token without exp claim"""
+        mock_jwt_decode.return_value = {'sub': 'user', 'iss': 'issuer'}  # No exp claim
+        
+        result = is_jwt_token_expired("token_without_exp")
+        assert result is True
+
+    @patch('database.JWT_AVAILABLE', True)
+    @patch('jwt.decode')
+    def test_is_jwt_token_expired_decode_error(self, mock_jwt_decode):
+        """Test JWT token expiration check when decoding fails"""
+        mock_jwt_decode.side_effect = Exception("Invalid token")
+        
+        result = is_jwt_token_expired("invalid_token")
+        assert result is True
+
+    @patch('database.JWT_AVAILABLE', False)
+    def test_is_jwt_token_expired_jwt_not_available(self):
+        """Test JWT token expiration check when JWT is not available"""
+        result = is_jwt_token_expired("any_token")
+        assert result is True
+
+    @patch('database.is_jwt_token_expired')
+    def test_cache_and_get_jwt_token(self, mock_is_expired):
+        """Test caching and retrieving JWT tokens"""
+        cache_key = "test_user:/path/to/key"
+        test_token = "test.jwt.token"
+        
+        # Mock token as not expired
+        mock_is_expired.return_value = False
+        
+        # Initially, token should not be cached
+        cached_token = get_cached_jwt_token(cache_key)
+        assert cached_token is None
+        
+        # Cache the token
+        cache_jwt_token(cache_key, test_token)
+        
+        # Now it should be retrievable
+        cached_token = get_cached_jwt_token(cache_key)
+        assert cached_token == test_token
+
+    @patch('database.is_jwt_token_expired')
+    def test_get_cached_jwt_token_expired(self, mock_is_expired):
+        """Test that expired tokens are removed from cache"""
+        cache_key = "test_user:/path/to/key"
+        test_token = "expired.jwt.token"
+        
+        # Cache the token
+        cache_jwt_token(cache_key, test_token)
+        
+        # Mock the token as expired
+        mock_is_expired.return_value = True
+        
+        # Getting the token should return None and remove it from cache
+        cached_token = get_cached_jwt_token(cache_key)
+        assert cached_token is None
+        
+        # Verify it's actually removed from cache
+        mock_is_expired.return_value = False  # Reset mock
+        cached_token = get_cached_jwt_token(cache_key)
+        assert cached_token is None  # Should still be None
+
+    @patch('database.is_jwt_token_expired')
+    def test_clear_jwt_token_cache(self, mock_is_expired):
+        """Test clearing the entire JWT token cache"""
+        # Mock tokens as not expired
+        mock_is_expired.return_value = False
+        
+        # Cache multiple tokens
+        cache_jwt_token("user1:/key1", "token1")
+        cache_jwt_token("user2:/key2", "token2")
+        
+        # Verify tokens are cached
+        assert get_cached_jwt_token("user1:/key1") == "token1"
+        assert get_cached_jwt_token("user2:/key2") == "token2"
+        
+        # Clear cache
+        clear_jwt_token_cache()
+        
+        # Verify all tokens are gone
+        assert get_cached_jwt_token("user1:/key1") is None
+        assert get_cached_jwt_token("user2:/key2") is None
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('database.SNOWFLAKE_USERNAME', 'test_user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PATH', '/path/to/key.pem')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', None)
+    @patch('database.generate_jwt_token')
+    @patch('database.is_jwt_token_expired')
+    def test_get_auth_token_caching_behavior(self, mock_is_expired, mock_generate_jwt):
+        """Test that get_auth_token properly caches JWT tokens"""
+        mock_generate_jwt.return_value = "new_jwt_token"
+        mock_is_expired.return_value = False  # Token is not expired
+        
+        # First call should generate a new token
+        token1 = get_auth_token()
+        assert token1 == "new_jwt_token"
+        assert mock_generate_jwt.call_count == 1
+        
+        # Second call should use cached token (no new generation)
+        token2 = get_auth_token()
+        assert token2 == "new_jwt_token"
+        assert mock_generate_jwt.call_count == 1  # Should not increase
+
+    @patch('database.SNOWFLAKE_AUTH_METHOD', 'private_key')
+    @patch('database.SNOWFLAKE_USERNAME', 'test_user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PATH', '/path/to/key.pem')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE', None)
+    @patch('database.generate_jwt_token')
+    @patch('database.is_jwt_token_expired')
+    def test_get_auth_token_expired_token_regeneration(self, mock_is_expired, mock_generate_jwt):
+        """Test that expired tokens trigger regeneration"""
+        mock_generate_jwt.side_effect = ["first_token", "second_token"]
+        
+        # First call generates and caches token
+        mock_is_expired.return_value = False
+        token1 = get_auth_token()
+        assert token1 == "first_token"
+        assert mock_generate_jwt.call_count == 1
+        
+        # Second call with expired token should regenerate
+        mock_is_expired.return_value = True
+        token2 = get_auth_token()
+        assert token2 == "second_token"
+        assert mock_generate_jwt.call_count == 2
+
+    @pytest.mark.asyncio
+    @patch('database.is_jwt_token_expired')
+    async def test_cleanup_resources_clears_jwt_cache(self, mock_is_expired):
+        """Test that cleanup_resources clears JWT token cache"""
+        mock_is_expired.return_value = False  # Mock tokens as not expired
+        
+        # Cache some tokens
+        cache_jwt_token("user1:/key1", "token1")
+        cache_jwt_token("user2:/key2", "token2")
+        
+        # Verify tokens are cached
+        assert get_cached_jwt_token("user1:/key1") == "token1"
+        
+        # Call cleanup_resources (we need to call the real function)
+        from database import cleanup_resources as real_cleanup
+        await real_cleanup()
+        
+        # Verify JWT cache is cleared
+        assert get_cached_jwt_token("user1:/key1") is None
+        assert get_cached_jwt_token("user2:/key2") is None

@@ -3,6 +3,7 @@ import time
 import logging
 import asyncio
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Any, List, Dict, Optional, Tuple
@@ -17,6 +18,10 @@ from config import (
     SNOWFLAKE_SCHEMA,
     SNOWFLAKE_TOKEN,
     SNOWFLAKE_WAREHOUSE,
+    SNOWFLAKE_AUTH_METHOD,
+    SNOWFLAKE_USERNAME,
+    SNOWFLAKE_PRIVATE_KEY_PATH,
+    SNOWFLAKE_PRIVATE_KEY_PASSPHRASE,
     ENABLE_CACHING,
     CACHE_TTL_SECONDS,
     CACHE_MAX_SIZE,
@@ -28,7 +33,21 @@ from config import (
 )
 from metrics import track_snowflake_query
 
+# Try to import JWT and cryptography for private key authentication
+try:
+    import jwt
+    from cryptography.hazmat.primitives import serialization
+    JWT_AVAILABLE = True
+except ImportError:
+    JWT_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+
+class SnowflakeAuthenticationError(Exception):
+    """Raised when Snowflake authentication fails"""
+    pass
+
 
 # Global connection pool and cache
 _connection_pool = None
@@ -36,6 +55,10 @@ _cache = TTLCache(maxsize=CACHE_MAX_SIZE, ttl=CACHE_TTL_SECONDS) if ENABLE_CACHI
 _cache_lock = threading.RLock()
 _throttler = Throttler(rate_limit=RATE_LIMIT_PER_SECOND, period=1.0)
 _thread_pool = ThreadPoolExecutor(max_workers=THREAD_POOL_WORKERS, thread_name_prefix="snowflake-worker")
+
+# JWT token cache for private key authentication
+_jwt_token_cache = {}
+_jwt_token_cache_lock = threading.RLock()
 
 
 class SnowflakeConnectionPool:
@@ -125,6 +148,7 @@ async def cleanup_resources():
     if _thread_pool:
         _thread_pool.shutdown(wait=True)
     clear_cache()
+    clear_jwt_token_cache()
 
 
 def sanitize_sql_value(value: str) -> str:
@@ -136,6 +160,233 @@ def sanitize_sql_value(value: str) -> str:
     return value.replace("'", "''")
 
 
+def load_private_key(private_key_path: str, passphrase: Optional[str] = None) -> bytes:
+    """
+    Load a private key from file for Snowflake authentication.
+
+    Args:
+        private_key_path: Path to the private key file
+        passphrase: Optional passphrase for encrypted private key
+
+    Returns:
+        Private key in bytes format
+
+    Raises:
+        FileNotFoundError: If the private key file doesn't exist
+        ValueError: If the private key is invalid or cannot be loaded
+    """
+    if not JWT_AVAILABLE:
+        raise ImportError("JWT and cryptography libraries are required for private key authentication. "
+                          "Install with: pip install PyJWT[crypto] cryptography")
+
+    try:
+        with open(private_key_path, 'rb') as key_file:
+            private_key_data = key_file.read()
+
+        # Try to load the private key
+        passphrase_bytes = passphrase.encode() if passphrase else None
+        private_key = serialization.load_pem_private_key(
+            private_key_data,
+            password=passphrase_bytes
+        )
+
+        # Convert to PEM format for JWT signing
+        pem_key = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+
+        logger.info(f"Successfully loaded private key from {private_key_path}")
+        return pem_key
+
+    except FileNotFoundError:
+        logger.error(f"Private key file not found: {private_key_path}")
+        raise
+    except Exception as e:
+        logger.error(f"Error loading private key from {private_key_path}: {e}")
+        raise ValueError(f"Unable to load private key: {e}")
+
+
+def generate_jwt_token(username: str, private_key_path: str,
+                       passphrase: Optional[str] = None) -> str:
+    """
+    Generate a JWT token for Snowflake private key authentication.
+
+    Args:
+        username: Snowflake username
+        private_key_path: Path to the private key file
+        passphrase: Optional passphrase for the private key
+
+    Returns:
+        JWT token string
+
+    Raises:
+        ValueError: If unable to generate the token
+    """
+    if not JWT_AVAILABLE:
+        raise ImportError("JWT and cryptography libraries are required for private key authentication. "
+                          "Install with: pip install PyJWT[crypto] cryptography")
+
+    try:
+        # Load the private key
+        private_key = load_private_key(private_key_path, passphrase)
+
+        # Create JWT payload
+        now = datetime.now(timezone.utc)
+        payload = {
+            'iss': f"{username}.SNOWFLAKE",  # Issuer
+            'sub': f"{username}.SNOWFLAKE",  # Subject
+            'iat': int(now.timestamp()),     # Issued at
+            'exp': int((now + timedelta(minutes=59)).timestamp()),  # Expires (max 60 minutes)
+            'jti': str(uuid.uuid4())         # JWT ID (unique identifier)
+        }
+
+        # Generate JWT token
+        token = jwt.encode(payload, private_key, algorithm='RS256')
+
+        logger.info(f"Successfully generated JWT token for user {username}")
+        return token
+
+    except Exception as e:
+        logger.error(f"Error generating JWT token for user {username}: {e}")
+        raise ValueError(f"Unable to generate JWT token: {e}")
+
+
+def is_jwt_token_expired(token: str) -> bool:
+    """
+    Check if a JWT token is expired or will expire soon.
+
+    Args:
+        token: JWT token string
+
+    Returns:
+        True if token is expired or will expire within 5 minutes, False otherwise
+    """
+    if not JWT_AVAILABLE:
+        return True
+
+    try:
+        # Decode without verification to check expiration
+        payload = jwt.decode(token, options={"verify_signature": False})
+        exp_timestamp = payload.get('exp')
+
+        if not exp_timestamp:
+            return True
+
+        # Consider token expired if it expires within 5 minutes
+        buffer_time = 5 * 60  # 5 minutes buffer
+        current_time = datetime.now(timezone.utc).timestamp()
+
+        return (exp_timestamp - current_time) <= buffer_time
+
+    except Exception as e:
+        logger.debug(f"Error checking JWT token expiration: {e}")
+        return True
+
+
+def get_cached_jwt_token(cache_key: str) -> Optional[str]:
+    """
+    Get a cached JWT token if it exists and is not expired.
+
+    Args:
+        cache_key: Unique key for the token cache
+
+    Returns:
+        Valid JWT token or None if not cached or expired
+    """
+    with _jwt_token_cache_lock:
+        cached_data = _jwt_token_cache.get(cache_key)
+        if not cached_data:
+            return None
+
+        token, cached_time = cached_data
+
+        # Check if token is expired
+        if is_jwt_token_expired(token):
+            # Remove expired token from cache
+            del _jwt_token_cache[cache_key]
+            logger.debug(f"Removed expired JWT token from cache for key: {cache_key}")
+            return None
+
+        logger.debug(f"Using cached JWT token for key: {cache_key}")
+        return token
+
+
+def cache_jwt_token(cache_key: str, token: str) -> None:
+    """
+    Cache a JWT token with its generation time.
+
+    Args:
+        cache_key: Unique key for the token cache
+        token: JWT token to cache
+    """
+    with _jwt_token_cache_lock:
+        _jwt_token_cache[cache_key] = (token, datetime.now(timezone.utc))
+        logger.debug(f"Cached new JWT token for key: {cache_key}")
+
+
+def clear_jwt_token_cache() -> None:
+    """Clear all cached JWT tokens."""
+    with _jwt_token_cache_lock:
+        cleared_count = len(_jwt_token_cache)
+        _jwt_token_cache.clear()
+        if cleared_count > 0:
+            logger.info(f"Cleared {cleared_count} cached JWT tokens")
+
+
+def get_auth_token(snowflake_token: Optional[str] = None) -> Optional[str]:
+    """
+    Get authentication token based on the configured auth method.
+
+    Args:
+        snowflake_token: Explicit token to use (overrides config)
+
+    Returns:
+        Authentication token (either provided token or generated JWT)
+
+    Raises:
+        ValueError: If configuration is invalid or token generation fails
+    """
+    # Use provided token if available
+    if snowflake_token:
+        return snowflake_token
+
+    # Use configured token if auth method is token
+    if SNOWFLAKE_AUTH_METHOD == "token":
+        return SNOWFLAKE_TOKEN
+
+    # Generate JWT token for private key authentication with caching
+    elif SNOWFLAKE_AUTH_METHOD == "private_key":
+        if not SNOWFLAKE_USERNAME:
+            raise ValueError("SNOWFLAKE_USERNAME is required for private key authentication")
+        if not SNOWFLAKE_PRIVATE_KEY_PATH:
+            raise ValueError("SNOWFLAKE_PRIVATE_KEY_PATH is required for private key authentication")
+
+        # Create cache key based on username and key path
+        cache_key = f"{SNOWFLAKE_USERNAME}:{SNOWFLAKE_PRIVATE_KEY_PATH}"
+
+        # Try to get cached token first
+        cached_token = get_cached_jwt_token(cache_key)
+        if cached_token:
+            return cached_token
+
+        # Generate new token if not cached or expired
+        new_token = generate_jwt_token(
+            SNOWFLAKE_USERNAME,
+            SNOWFLAKE_PRIVATE_KEY_PATH,
+            SNOWFLAKE_PRIVATE_KEY_PASSPHRASE
+        )
+
+        # Cache the new token
+        cache_jwt_token(cache_key, new_token)
+
+        return new_token
+    else:
+        raise ValueError(f"Invalid SNOWFLAKE_AUTH_METHOD: {SNOWFLAKE_AUTH_METHOD}. "
+                         "Must be 'token' or 'private_key'.")
+
+
 async def make_snowflake_request(
     endpoint: str,
     method: str = "POST",
@@ -144,12 +395,16 @@ async def make_snowflake_request(
     use_cache: bool = True
 ) -> dict[str, Any] | None:
     """Make a request to Snowflake API with connection pooling and caching"""
-    # Use provided token or fall back to config
-    token = snowflake_token or SNOWFLAKE_TOKEN
+    # Get authentication token based on configured method
+    try:
+        token = get_auth_token(snowflake_token)
+    except Exception as e:
+        logger.error(f"Failed to get authentication token: {e}")
+        raise SnowflakeAuthenticationError(f"Authentication failed: {e}")
 
     if not token:
-        logger.error("SNOWFLAKE_TOKEN environment variable is required but not set")
-        return None
+        logger.error("Authentication token is required but could not be obtained")
+        raise SnowflakeAuthenticationError("Authentication token could not be obtained")
 
     # Generate cache key for GET requests
     cache_key = None
@@ -199,6 +454,9 @@ async def make_snowflake_request(
 
     except httpx.HTTPStatusError as http_error:
         logger.error(f"HTTP error from Snowflake API: {http_error.response.status_code} - {http_error.response.text}")
+        # Check if this is an authentication error
+        if http_error.response.status_code == 401:
+            raise SnowflakeAuthenticationError(f"Authentication failed: {http_error.response.text}")
         return None
     except Exception as e:
         logger.error(f"Unexpected error in Snowflake API request: {str(e)}")
@@ -275,6 +533,9 @@ async def execute_snowflake_query(
                             else:
                                 logger.warning(f"Failed to fetch partition {partition_index}")
 
+                        except SnowflakeAuthenticationError:
+                            # Re-raise authentication errors
+                            raise
                         except Exception as e:
                             logger.error(f"Error fetching partition {partition_index}: {e}")
 
@@ -307,6 +568,9 @@ async def execute_snowflake_query(
         success = True  # No data is still a successful query
         return []
 
+    except SnowflakeAuthenticationError:
+        # Re-raise authentication errors so they can be handled at the tool level
+        raise
     except Exception as e:
         logger.error(f"Error executing Snowflake query: {str(e)}")
         logger.error(f"Query that failed: {sql}")

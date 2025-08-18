@@ -4,4 +4,5 @@ Snowflake_CSV/
 __pycache__/
 **/.pytest_cache
 .coverage
-coverage.xml   
+coverage.xml
+*.pem 

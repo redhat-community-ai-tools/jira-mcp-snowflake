@@ -73,6 +73,56 @@ class TestConfig:
         assert config.MCP_TRANSPORT == 'http'
         assert config.SNOWFLAKE_TOKEN is None  # Should be None for non-stdio
 
+    @patch.dict('os.environ', {
+        'SNOWFLAKE_AUTH_METHOD': 'private_key',
+        'SNOWFLAKE_USERNAME': 'test_user',
+        'SNOWFLAKE_PRIVATE_KEY_PATH': '/path/to/private_key.pem',
+        'SNOWFLAKE_PRIVATE_KEY_PASSPHRASE': 'test_passphrase'
+    })
+    def test_private_key_auth_config(self):
+        """Test private key authentication configuration"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_AUTH_METHOD == 'private_key'
+        assert config.SNOWFLAKE_USERNAME == 'test_user'
+        assert config.SNOWFLAKE_PRIVATE_KEY_PATH == '/path/to/private_key.pem'
+        assert config.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE == 'test_passphrase'
+
+    @patch.dict('os.environ', {}, clear=True)
+    def test_auth_method_default(self):
+        """Test authentication method default value"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_AUTH_METHOD == 'token'  # Default
+
+    @patch.dict('os.environ', {'SNOWFLAKE_AUTH_METHOD': 'TOKEN'})
+    def test_auth_method_case_insensitive(self):
+        """Test that auth method is converted to lowercase"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_AUTH_METHOD == 'token'
+
+    @patch.dict('os.environ', {
+        'SNOWFLAKE_AUTH_METHOD': 'private_key',
+        'SNOWFLAKE_USERNAME': 'test_user'
+    })
+    def test_private_key_auth_partial_config(self):
+        """Test private key authentication with partial configuration"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_AUTH_METHOD == 'private_key'
+        assert config.SNOWFLAKE_USERNAME == 'test_user'
+        assert config.SNOWFLAKE_PRIVATE_KEY_PATH is None  # Not set
+        assert config.SNOWFLAKE_PRIVATE_KEY_PASSPHRASE is None  # Not set
+
     @patch.dict('os.environ', {'ENABLE_METRICS': 'false'})
     def test_metrics_disabled(self):
         """Test metrics configuration when disabled"""

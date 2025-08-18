@@ -20,13 +20,21 @@ SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
 SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE", "DEFAULT")
 INTERNAL_GATEWAY = os.environ.get("INTERNAL_GATEWAY", "false")
 
-# Snowflake token handling - for stdio transport, get from environment
-# For other transports, it will be retrieved from request context in tools layer
+# Snowflake authentication configuration
+# Support both token and private key authentication methods
+SNOWFLAKE_AUTH_METHOD = os.environ.get("SNOWFLAKE_AUTH_METHOD", "token").lower()  # "token" or "private_key"
+
+# Token-based authentication (existing)
 if MCP_TRANSPORT == "stdio":
     SNOWFLAKE_TOKEN = os.environ.get("SNOWFLAKE_TOKEN")
 else:
     # For non-stdio transports, token will be passed from tools layer
     SNOWFLAKE_TOKEN = None
+
+# Private key authentication configuration
+SNOWFLAKE_USERNAME = os.environ.get("SNOWFLAKE_USERNAME")
+SNOWFLAKE_PRIVATE_KEY_PATH = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PATH")
+SNOWFLAKE_PRIVATE_KEY_PASSPHRASE = os.environ.get("SNOWFLAKE_PRIVATE_KEY_PASSPHRASE")  # Optional
 
 # Prometheus metrics configuration
 ENABLE_METRICS = os.environ.get("ENABLE_METRICS", "false").lower() == "true"

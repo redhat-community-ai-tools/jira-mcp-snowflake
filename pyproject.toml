@@ -10,6 +10,8 @@ dependencies = [
     "prometheus_client==0.20.0",
     "cachetools==5.3.2",
     "asyncio-throttle==1.0.2",
+    "PyJWT[crypto]==2.10.1",
+    "cryptography==44.0.0",
 ]
 
 [project.scripts]

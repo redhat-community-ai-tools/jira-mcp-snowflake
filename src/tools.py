@@ -3,13 +3,15 @@ from typing import Any, Optional, Dict, List
 
 from mcp.server.fastmcp import FastMCP
 
-from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY
+from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY, SNOWFLAKE_AUTH_METHOD
 from database import (
     execute_snowflake_query,
     format_snowflake_row,
     sanitize_sql_value,
     get_issue_links,
-    get_issue_enrichment_data_concurrent
+    get_issue_enrichment_data_concurrent,
+    SnowflakeAuthenticationError,
+    get_auth_token
 )
 from metrics import track_tool_usage, track_concurrent_operation
 
@@ -19,7 +21,14 @@ logger = logging.getLogger(__name__)
 def get_snowflake_token(mcp: FastMCP) -> Optional[str]:
     """Get Snowflake token from either config (stdio) or request headers (non-stdio)"""
     if MCP_TRANSPORT == "stdio" or INTERNAL_GATEWAY.lower() == "true":
-        return SNOWFLAKE_TOKEN
+        # For stdio transport, authentication is handled by the database layer
+        # based on SNOWFLAKE_AUTH_METHOD configuration
+        if SNOWFLAKE_AUTH_METHOD == "private_key":
+            logger.info("Using private key authentication for stdio transport")
+            return None  # Database layer will generate JWT token
+        else:
+            logger.info("Using token authentication for stdio transport")
+            return SNOWFLAKE_TOKEN
     else:
         try:
             # Get token from request headers for non-stdio transports
@@ -79,8 +88,19 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
-                return {"error": "Snowflake token not available", "issues": []}
+
+            # Check if we have a token when using token-based authentication
+            if not snowflake_token and SNOWFLAKE_AUTH_METHOD == "token":
+                return {"error": "No Snowflake token available", "issues": []}
+
+            # For private key auth, validate JWT token generation early
+            if SNOWFLAKE_AUTH_METHOD == "private_key":
+                try:
+                    test_token = get_auth_token(snowflake_token)
+                    if not test_token:
+                        return {"error": "Failed to generate JWT token for private key authentication", "issues": []}
+                except Exception as e:
+                    return {"error": f"JWT token error: {str(e)}", "issues": []}
 
             # Build SQL query with filters - always include component joins
             sql_conditions = []
@@ -270,6 +290,9 @@ def register_tools(mcp: FastMCP) -> None:
                 }
             }
 
+        except SnowflakeAuthenticationError as e:
+            logger.error(f"Authentication error in list_jira_issues: {str(e)}")
+            return {"error": "Authentication failed: Invalid or expired token", "issues": []}
         except Exception as e:
             return {"error": f"Error reading issues from Snowflake: {str(e)}", "issues": []}
 
@@ -288,8 +311,19 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
-                return {"error": "Snowflake token not available"}
+
+            # Check if we have a token when using token-based authentication
+            if not snowflake_token and SNOWFLAKE_AUTH_METHOD == "token":
+                return {"error": "No Snowflake token available"}
+
+            # For private key auth, validate JWT token generation early
+            if SNOWFLAKE_AUTH_METHOD == "private_key":
+                try:
+                    test_token = get_auth_token(snowflake_token)
+                    if not test_token:
+                        return {"error": "Failed to generate JWT token for private key authentication"}
+                except Exception as e:
+                    return {"error": f"JWT token error: {str(e)}"}
 
             # Validate input
             if not issue_keys:
@@ -405,6 +439,9 @@ def register_tools(mcp: FastMCP) -> None:
                 "total_requested": len(issue_keys)
             }
 
+        except SnowflakeAuthenticationError as e:
+            logger.error(f"Authentication error in get_jira_issue_details: {str(e)}")
+            return {"error": "Authentication failed: Invalid or expired token"}
         except Exception as e:
             return {"error": f"Error reading issue details from Snowflake: {str(e)}"}
 
@@ -420,8 +457,19 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
-                return {"error": "Snowflake token not available"}
+
+            # Check if we have a token when using token-based authentication
+            if not snowflake_token and SNOWFLAKE_AUTH_METHOD == "token":
+                return {"error": "No Snowflake token available"}
+
+            # For private key auth, validate JWT token generation early
+            if SNOWFLAKE_AUTH_METHOD == "private_key":
+                try:
+                    test_token = get_auth_token(snowflake_token)
+                    if not test_token:
+                        return {"error": "Failed to generate JWT token for private key authentication"}
+                except Exception as e:
+                    return {"error": f"JWT token error: {str(e)}"}
 
             sql = """
             SELECT
@@ -467,6 +515,9 @@ def register_tools(mcp: FastMCP) -> None:
                 "projects": project_stats
             }
 
+        except SnowflakeAuthenticationError as e:
+            logger.error(f"Authentication error in get_jira_project_summary: {str(e)}")
+            return {"error": "Authentication failed: Invalid or expired token"}
         except Exception as e:
             return {"error": f"Error generating project summary from Snowflake: {str(e)}"}
 
@@ -485,8 +536,19 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
-                return {"error": "Snowflake token not available"}
+
+            # Check if we have a token when using token-based authentication
+            if not snowflake_token and SNOWFLAKE_AUTH_METHOD == "token":
+                return {"error": "No Snowflake token available"}
+
+            # For private key auth, validate JWT token generation early
+            if SNOWFLAKE_AUTH_METHOD == "private_key":
+                try:
+                    test_token = get_auth_token(snowflake_token)
+                    if not test_token:
+                        return {"error": "Failed to generate JWT token for private key authentication"}
+                except Exception as e:
+                    return {"error": f"JWT token error: {str(e)}"}
 
             # First get the issue ID from the issue key
             sql = f"""
@@ -514,5 +576,8 @@ def register_tools(mcp: FastMCP) -> None:
                 "total_links": len(issue_links)
             }
 
+        except SnowflakeAuthenticationError as e:
+            logger.error(f"Authentication error in get_jira_issue_links: {str(e)}")
+            return {"error": "Authentication failed: Invalid or expired token"}
         except Exception as e:
             return {"error": f"Error reading issue links from Snowflake: {str(e)}"}
