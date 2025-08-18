@@ -10,7 +10,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
-from config import MCP_TRANSPORT
+from config import MCP_TRANSPORT, FASTMCP_HOST, FASTMCP_PORT
 from metrics import start_metrics_thread, set_active_connections
 from tools import register_tools
 from database import cleanup_resources
@@ -30,7 +30,11 @@ async def async_cleanup():
 def main():
     """Main entry point for the MCP server"""
     # Initialize FastMCP server
-    mcp = FastMCP("jira-mcp-snowflake", host="0.0.0.0")
+    mcp = FastMCP(
+        "jira-mcp-snowflake",
+        host=FASTMCP_HOST,
+        port=FASTMCP_PORT,
+    )
 
     # Register all tools
     register_tools(mcp)

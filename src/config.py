@@ -10,6 +10,8 @@ logging.basicConfig(
 
 # MCP Configuration
 MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")
+FASTMCP_HOST = os.environ.get("FASTMCP_HOST", "0.0.0.0")
+FASTMCP_PORT = os.environ.get("FASTMCP_PORT", "8000")
 
 # Snowflake API configuration from environment variables
 SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL")

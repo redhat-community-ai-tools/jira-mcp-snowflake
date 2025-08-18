@@ -16,6 +16,8 @@ class TestMCPServer:
     @patch('mcp_server.register_tools')
     @patch('mcp_server.FastMCP')
     @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('mcp_server.FASTMCP_HOST', '0.0.0.0')
+    @patch('mcp_server.FASTMCP_PORT', '8000')
     def test_main_success(self, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections):
         """Test successful main function execution"""
         # Setup mocks
@@ -25,8 +27,8 @@ class TestMCPServer:
         # Run main function
         main()
         
-        # Verify FastMCP was initialized with correct name
-        mock_fastmcp.assert_called_once_with("jira-mcp-snowflake")
+        # Verify FastMCP was initialized with correct name, host, and port
+        mock_fastmcp.assert_called_once_with("jira-mcp-snowflake", host='0.0.0.0', port='8000')
         
         # Verify tools were registered
         mock_register_tools.assert_called_once_with(mock_mcp_instance)
@@ -190,6 +192,8 @@ class TestMCPServer:
     @patch('mcp_server.start_metrics_thread')
     @patch('mcp_server.register_tools')
     @patch('mcp_server.FastMCP')
+    @patch('mcp_server.FASTMCP_HOST', '0.0.0.0')
+    @patch('mcp_server.FASTMCP_PORT', '8000')
     def test_main_initialization_order(self, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections):
         """Test that initialization happens in the correct order"""
         mock_mcp_instance = MagicMock()
@@ -199,7 +203,7 @@ class TestMCPServer:
         
         # Verify call order
         expected_calls = [
-            call("jira-mcp-snowflake"),  # FastMCP initialization
+            call("jira-mcp-snowflake", host='0.0.0.0', port='8000'),  # FastMCP initialization
         ]
         mock_fastmcp.assert_has_calls(expected_calls)
         
@@ -339,6 +343,8 @@ class TestMainIntegration:
     @patch('mcp_server.register_tools')
     @patch('mcp_server.FastMCP')
     @patch('mcp_server.MCP_TRANSPORT', 'stdio')
+    @patch('mcp_server.FASTMCP_HOST', '0.0.0.0')
+    @patch('mcp_server.FASTMCP_PORT', '8000')
     @patch('mcp_server.logger')
     def test_main_complete_lifecycle(self, mock_logger, mock_fastmcp, mock_register_tools, mock_start_metrics, mock_set_connections, mock_cleanup):
         """Test complete main function lifecycle with all components"""
@@ -348,7 +354,7 @@ class TestMainIntegration:
         main()
         
         # Verify initialization sequence
-        mock_fastmcp.assert_called_once_with("jira-mcp-snowflake")
+        mock_fastmcp.assert_called_once_with("jira-mcp-snowflake", host='0.0.0.0', port='8000')
         mock_register_tools.assert_called_once_with(mock_mcp_instance)
         mock_start_metrics.assert_called_once()
         
