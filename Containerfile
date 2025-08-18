@@ -1,4 +1,4 @@
-FROM registry.redhat.io/ubi9/python-311
+FROM quay.io/sclorg/python-312-minimal-c9s:latest
 
 LABEL konflux.additional-tags="latest"
 # Set default MCP transport if not provided
