@@ -93,19 +93,93 @@ The codebase is organized into modular components in the `src/` directory:
 
 The following environment variables are used to configure the Snowflake connection:
 
-### Required
+### Connection Method
+- **`SNOWFLAKE_CONNECTION_METHOD`** - Connection method to use
+  - Values: `api` (REST API) or `connector` (snowflake-connector-python)
+  - Default: `api`
+
+### REST API Method (Default)
+When using `SNOWFLAKE_CONNECTION_METHOD=api`:
+
+#### Required
 - **`SNOWFLAKE_TOKEN`** - Your Snowflake authentication token (Bearer token)
 - **`SNOWFLAKE_BASE_URL`** - Snowflake API base URL (e.g., `https://your-account.snowflakecomputing.com/api/v2`)
 - **`SNOWFLAKE_DATABASE`** - Snowflake database name containing your JIRA data
 - **`SNOWFLAKE_SCHEMA`** - Snowflake schema name containing your JIRA tables
 
-### Optional
+### Connector Method (Service Account Support)
+When using `SNOWFLAKE_CONNECTION_METHOD=connector`:
+
+#### Required for All Methods
+- **`SNOWFLAKE_ACCOUNT`** - Snowflake account identifier (e.g., `your-account.snowflakecomputing.com`)
+- **`SNOWFLAKE_DATABASE`** - Snowflake database name containing your JIRA data
+- **`SNOWFLAKE_SCHEMA`** - Snowflake schema name containing your JIRA tables
+- **`SNOWFLAKE_WAREHOUSE`** - Snowflake warehouse name
+
+#### Authentication Methods
+
+**Private Key Authentication (Recommended for Service Accounts)**
+- **`SNOWFLAKE_AUTHENTICATOR`** - Set to `snowflake_jwt`
+- **`SNOWFLAKE_USER`** - Snowflake username that has the public key registered
+- **`SNOWFLAKE_PRIVATE_KEY_FILE`** - Path to private key file (PKCS#8 format)
+- **`SNOWFLAKE_PRIVATE_KEY_FILE_PWD`** - Private key password (optional, if key is encrypted)
+
+**Username/Password Authentication**
+- **`SNOWFLAKE_AUTHENTICATOR`** - Set to `snowflake` (default)
+- **`SNOWFLAKE_USER`** - Snowflake username
+- **`SNOWFLAKE_PASSWORD`** - Snowflake password
+
+**OAuth Client Credentials**
+- **`SNOWFLAKE_AUTHENTICATOR`** - Set to `oauth_client_credentials`
+- **`SNOWFLAKE_OAUTH_CLIENT_ID`** - OAuth client ID
+- **`SNOWFLAKE_OAUTH_CLIENT_SECRET`** - OAuth client secret
+- **`SNOWFLAKE_OAUTH_TOKEN_URL`** - OAuth token URL (optional)
+
+**OAuth Token**
+- **`SNOWFLAKE_AUTHENTICATOR`** - Set to `oauth`
+- **`SNOWFLAKE_TOKEN`** - OAuth access token
+
+#### Optional
+- **`SNOWFLAKE_ROLE`** - Snowflake role to use (optional)
+
+### General Configuration
 - **`MCP_TRANSPORT`** - Transport protocol for MCP communication  
   - Default: `stdio`
 - **`ENABLE_METRICS`** - Enable Prometheus metrics collection  
   - Default: `false`
 - **`METRICS_PORT`** - Port for metrics HTTP server  
   - Default: `8000`
+
+### Private Key Setup Example
+
+To set up private key authentication:
+
+1. **Generate RSA key pair:**
+   ```bash
+   # Generate private key
+   openssl genrsa 2048 | openssl pkcs8 -topk8 -inform PEM -out rsa_key.p8
+   
+   # Generate public key
+   openssl rsa -in rsa_key.p8 -pubout -out rsa_key.pub
+   ```
+
+2. **Register public key with Snowflake user:**
+   ```sql
+   ALTER USER your_service_account SET RSA_PUBLIC_KEY='MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...';
+   ```
+
+3. **Set environment variables:**
+   ```bash
+   export SNOWFLAKE_CONNECTION_METHOD=connector
+   export SNOWFLAKE_AUTHENTICATOR=snowflake_jwt
+   export SNOWFLAKE_ACCOUNT=your-account.snowflakecomputing.com
+   export SNOWFLAKE_USER=your_service_account
+   export SNOWFLAKE_PRIVATE_KEY_FILE=/path/to/rsa_key.p8
+   export SNOWFLAKE_DATABASE=your_database
+   export SNOWFLAKE_SCHEMA=your_schema
+   export SNOWFLAKE_WAREHOUSE=your_warehouse
+   export SNOWFLAKE_ROLE=your_role
+   ```
 
 
 ## Installation & Setup
@@ -205,8 +279,7 @@ This will create a local image named `jira-mcp-snowflake:latest` that you can us
 
 ## Running with Podman or Docker
 
-Example configuration for running with Podman:
-
+**Example 1: REST API with Token**
 ```json
 {
   "mcpServers": {
@@ -216,10 +289,41 @@ Example configuration for running with Podman:
         "run",
         "-i",
         "--rm",
+        "-e", "SNOWFLAKE_CONNECTION_METHOD=api",
         "-e", "SNOWFLAKE_TOKEN=your_token_here",
         "-e", "SNOWFLAKE_BASE_URL=https://your-account.snowflakecomputing.com/api/v2",
         "-e", "SNOWFLAKE_DATABASE=your_database_name",
         "-e", "SNOWFLAKE_SCHEMA=your_schema_name",
+        "-e", "MCP_TRANSPORT=stdio",
+        "-e", "ENABLE_METRICS=true",
+        "-e", "METRICS_PORT=8000",
+        "localhost/jira-mcp-snowflake:latest"
+      ]
+    }
+  }
+}
+```
+
+**Example 2: Private Key Authentication (Service Account)**
+```json
+{
+  "mcpServers": {
+    "jira-mcp-snowflake": {
+      "command": "podman",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-v", "/path/to/your/rsa_key.p8:/app/rsa_key.p8:ro",
+        "-e", "SNOWFLAKE_CONNECTION_METHOD=connector",
+        "-e", "SNOWFLAKE_AUTHENTICATOR=snowflake_jwt",
+        "-e", "SNOWFLAKE_ACCOUNT=your-account.snowflakecomputing.com",
+        "-e", "SNOWFLAKE_USER=your_service_account",
+        "-e", "SNOWFLAKE_PRIVATE_KEY_FILE=/app/rsa_key.p8",
+        "-e", "SNOWFLAKE_DATABASE=your_database_name",
+        "-e", "SNOWFLAKE_SCHEMA=your_schema_name",
+        "-e", "SNOWFLAKE_WAREHOUSE=your_warehouse_name",
+        "-e", "SNOWFLAKE_ROLE=your_role_name",
         "-e", "MCP_TRANSPORT=stdio",
         "-e", "ENABLE_METRICS=true",
         "-e", "METRICS_PORT=8000",
