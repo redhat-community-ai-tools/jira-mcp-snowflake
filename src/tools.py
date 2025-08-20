@@ -3,7 +3,7 @@ from typing import Any, Optional, Dict, List
 
 from mcp.server.fastmcp import FastMCP
 
-from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY
+from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY, SNOWFLAKE_CONNECTION_METHOD
 from database import (
     execute_snowflake_query,
     format_snowflake_row,
@@ -79,7 +79,7 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
+            if not snowflake_token and SNOWFLAKE_CONNECTION_METHOD == "api":
                 return {"error": "Snowflake token not available", "issues": []}
 
             # Build SQL query with filters - always include component joins
@@ -288,7 +288,7 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
+            if not snowflake_token and SNOWFLAKE_CONNECTION_METHOD == "api":
                 return {"error": "Snowflake token not available"}
 
             # Validate input
@@ -420,7 +420,7 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
+            if not snowflake_token and SNOWFLAKE_CONNECTION_METHOD == "api":
                 return {"error": "Snowflake token not available"}
 
             sql = """
@@ -485,7 +485,7 @@ def register_tools(mcp: FastMCP) -> None:
         try:
             # Get the Snowflake token
             snowflake_token = get_snowflake_token(mcp)
-            if not snowflake_token:
+            if not snowflake_token and SNOWFLAKE_CONNECTION_METHOD == "api":
                 return {"error": "Snowflake token not available"}
 
             # First get the issue ID from the issue key
