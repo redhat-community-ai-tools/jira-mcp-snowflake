@@ -189,7 +189,12 @@ def register_tools(mcp: FastMCP) -> None:
             ]
 
             for row in rows:
-                row_dict = format_snowflake_row(row, columns)
+                # If using connector method, rows are already dictionaries
+                if isinstance(row, dict):
+                    row_dict = row
+                else:
+                    # API method returns raw rows that need formatting
+                    row_dict = format_snowflake_row(row, columns)
 
                 issue_id = row_dict.get("ID")
                 if issue_id is None:
@@ -341,7 +346,12 @@ def register_tools(mcp: FastMCP) -> None:
             found_keys = set()
 
             for row in rows:
-                row_dict = format_snowflake_row(row, columns)
+                # If using connector method, rows are already dictionaries
+                if isinstance(row, dict):
+                    row_dict = row
+                else:
+                    # API method returns raw rows that need formatting
+                    row_dict = format_snowflake_row(row, columns)
                 issue_key = row_dict.get("ISSUE_KEY")
 
                 if issue_key:
@@ -441,7 +451,12 @@ def register_tools(mcp: FastMCP) -> None:
             total_issues = 0
 
             for row in rows:
-                row_dict = format_snowflake_row(row, columns)
+                # If using connector method, rows are already dictionaries
+                if isinstance(row, dict):
+                    row_dict = row
+                else:
+                    # API method returns raw rows that need formatting
+                    row_dict = format_snowflake_row(row, columns)
 
                 project = row_dict.get("PROJECT", "Unknown")
                 status = row_dict.get("ISSUESTATUS", "Unknown")
