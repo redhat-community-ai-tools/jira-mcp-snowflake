@@ -12,6 +12,9 @@ from database import (  # noqa: E402
     sanitize_sql_value,
     make_snowflake_request,
     execute_snowflake_query,
+    execute_snowflake_query_connector,
+    execute_snowflake_query_api,
+    _execute_connector_query_sync,
     format_snowflake_row,
     parse_snowflake_timestamp,
     get_issue_labels,
@@ -21,11 +24,15 @@ from database import (  # noqa: E402
     execute_queries_in_batches,
     format_snowflake_rows_concurrent,
     get_connection_pool,
+    get_connector_pool,
     get_cache_key,
     get_from_cache,
     set_in_cache,
     clear_cache,
-    cleanup_resources
+    cleanup_resources,
+    SnowflakeConnectorPool,
+    _process_links_rows,
+    SNOWFLAKE_CONNECTOR_AVAILABLE
 )
 
 
@@ -961,3 +968,525 @@ class TestConcurrentFunctions:
         """Test concurrent row formatting with empty input"""
         result = await format_snowflake_rows_concurrent([], ["col1", "col2"])
         assert result == []
+
+
+class TestSnowflakeConnectorPool:
+    """Test cases for SnowflakeConnectorPool class"""
+
+    def test_init(self):
+        """Test SnowflakeConnectorPool initialization"""
+        pool = SnowflakeConnectorPool()
+        assert pool._connection is None
+        assert pool._lock is not None
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', False)
+    def test_build_connection_params_no_connector(self):
+        """Test connection params building when connector is not available"""
+        pool = SnowflakeConnectorPool()
+        with pytest.raises(ImportError, match="snowflake-connector-python is not installed"):
+            pool._build_connection_params()
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', None)
+    def test_build_connection_params_no_account(self):
+        """Test connection params building without account"""
+        pool = SnowflakeConnectorPool()
+        with pytest.raises(ValueError, match="SNOWFLAKE_ACCOUNT is required"):
+            pool._build_connection_params()
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'snowflake')
+    @patch('database.SNOWFLAKE_USER', 'test-user')
+    @patch('database.SNOWFLAKE_PASSWORD', 'test-password')
+    @patch('database.SNOWFLAKE_ROLE', 'test-role')
+    def test_build_connection_params_default_auth(self):
+        """Test connection params building with default authentication"""
+        pool = SnowflakeConnectorPool()
+        params = pool._build_connection_params()
+        
+        assert params['account'] == 'test-account'
+        assert params['database'] == 'test-db'
+        assert params['schema'] == 'test-schema'
+        assert params['warehouse'] == 'test-warehouse'
+        assert params['user'] == 'test-user'
+        assert params['password'] == 'test-password'
+        assert params['role'] == 'test-role'
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'snowflake_jwt')
+    @patch('database.SNOWFLAKE_USER', 'test-user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_FILE', '/path/to/key.p8')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_FILE_PWD', 'key-password')
+    def test_build_connection_params_jwt_auth(self):
+        """Test connection params building with JWT authentication"""
+        pool = SnowflakeConnectorPool()
+        params = pool._build_connection_params()
+        
+        assert params['authenticator'] == 'SNOWFLAKE_JWT'
+        assert params['user'] == 'test-user'
+        assert params['private_key_file'] == '/path/to/key.p8'
+        assert params['private_key_file_pwd'] == 'key-password'
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'snowflake_jwt')
+    @patch('database.SNOWFLAKE_USER', 'test-user')
+    @patch('database.SNOWFLAKE_PRIVATE_KEY_FILE', None)
+    def test_build_connection_params_jwt_auth_no_key_file(self):
+        """Test connection params building with JWT authentication but no key file"""
+        pool = SnowflakeConnectorPool()
+        with pytest.raises(ValueError, match="SNOWFLAKE_PRIVATE_KEY_FILE is required for JWT authentication"):
+            pool._build_connection_params()
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'oauth_client_credentials')
+    @patch('database.SNOWFLAKE_OAUTH_CLIENT_ID', None)
+    @patch('database.SNOWFLAKE_OAUTH_CLIENT_SECRET', None)
+    def test_build_connection_params_oauth_client_credentials_missing_creds(self):
+        """Test connection params building with OAuth client credentials but missing credentials"""
+        pool = SnowflakeConnectorPool()
+        with pytest.raises(ValueError, match="SNOWFLAKE_OAUTH_CLIENT_ID and SNOWFLAKE_OAUTH_CLIENT_SECRET are required"):
+            pool._build_connection_params()
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'oauth')
+    @patch('config.SNOWFLAKE_TOKEN', None)
+    def test_build_connection_params_oauth_token_missing_token(self):
+        """Test connection params building with OAuth token but missing token"""
+        pool = SnowflakeConnectorPool()
+        with pytest.raises(ValueError, match="SNOWFLAKE_TOKEN is required for OAuth token authentication"):
+            pool._build_connection_params()
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'snowflake')
+    @patch('database.SNOWFLAKE_USER', None)
+    @patch('database.SNOWFLAKE_PASSWORD', None)
+    def test_build_connection_params_default_auth_missing_creds(self):
+        """Test connection params building with default auth but missing credentials"""
+        pool = SnowflakeConnectorPool()
+        with pytest.raises(ValueError, match="SNOWFLAKE_USER and SNOWFLAKE_PASSWORD are required"):
+            pool._build_connection_params()
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'oauth_client_credentials')
+    @patch('database.SNOWFLAKE_OAUTH_CLIENT_ID', 'client-id')
+    @patch('database.SNOWFLAKE_OAUTH_CLIENT_SECRET', 'client-secret')
+    @patch('database.SNOWFLAKE_OAUTH_TOKEN_URL', 'https://token.url')
+    def test_build_connection_params_oauth_client_credentials(self):
+        """Test connection params building with OAuth client credentials"""
+        pool = SnowflakeConnectorPool()
+        params = pool._build_connection_params()
+        
+        assert params['authenticator'] == 'OAUTH_CLIENT_CREDENTIALS'
+        assert params['oauth_client_id'] == 'client-id'
+        assert params['oauth_client_secret'] == 'client-secret'
+        assert params['oauth_token_request_url'] == 'https://token.url'
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.SNOWFLAKE_ACCOUNT', 'test-account')
+    @patch('database.SNOWFLAKE_DATABASE', 'test-db')
+    @patch('database.SNOWFLAKE_SCHEMA', 'test-schema')
+    @patch('database.SNOWFLAKE_WAREHOUSE', 'test-warehouse')
+    @patch('database.SNOWFLAKE_AUTHENTICATOR', 'oauth')
+    @patch('config.SNOWFLAKE_TOKEN', 'oauth-token')
+    def test_build_connection_params_oauth_token(self):
+        """Test connection params building with OAuth token"""
+        pool = SnowflakeConnectorPool()
+        params = pool._build_connection_params()
+        
+        assert params['authenticator'] == 'OAUTH'
+        assert params['token'] == 'oauth-token'
+
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.snowflake.connector.connect')
+    def test_get_connection_new(self, mock_connect):
+        """Test getting a new connection"""
+        mock_connection = MagicMock()
+        mock_connection.is_closed.return_value = True
+        mock_connect.return_value = mock_connection
+        
+        with patch.object(SnowflakeConnectorPool, '_build_connection_params') as mock_build:
+            mock_build.return_value = {'account': 'test'}
+            
+            pool = SnowflakeConnectorPool()
+            conn = pool.get_connection()
+            
+            assert conn == mock_connection
+            mock_connect.assert_called_once_with(account='test')
+
+    def test_get_connection_reuse_existing(self):
+        """Test reusing existing connection"""
+        mock_connection = MagicMock()
+        mock_connection.is_closed.return_value = False
+        
+        pool = SnowflakeConnectorPool()
+        pool._connection = mock_connection
+        
+        conn = pool.get_connection()
+        assert conn == mock_connection
+
+    def test_close_connection(self):
+        """Test closing connection"""
+        mock_connection = MagicMock()
+        mock_connection.is_closed.return_value = False
+        
+        pool = SnowflakeConnectorPool()
+        pool._connection = mock_connection
+        
+        pool.close()
+        mock_connection.close.assert_called_once()
+        assert pool._connection is None
+
+    def test_close_no_connection(self):
+        """Test closing when no connection exists"""
+        pool = SnowflakeConnectorPool()
+        pool.close()  # Should not raise exception
+
+
+class TestConnectorPool:
+    """Test cases for get_connector_pool function"""
+
+    def test_get_connector_pool_singleton(self):
+        """Test that get_connector_pool returns singleton instance"""
+        pool1 = get_connector_pool()
+        pool2 = get_connector_pool()
+        assert pool1 is pool2
+        assert isinstance(pool1, SnowflakeConnectorPool)
+
+
+class TestConnectorQueries:
+    """Test cases for connector-based query execution"""
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_CONNECTION_METHOD', 'connector')
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', True)
+    @patch('database.execute_snowflake_query_connector')
+    async def test_execute_snowflake_query_connector_method(self, mock_connector_query):
+        """Test query routing to connector method"""
+        mock_connector_query.return_value = [{"id": 1, "name": "test"}]
+        
+        result = await execute_snowflake_query("SELECT * FROM test", use_cache=False)
+        
+        mock_connector_query.assert_called_once_with("SELECT * FROM test", False)
+        assert result == [{"id": 1, "name": "test"}]
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_CONNECTION_METHOD', 'connector')
+    @patch('database.SNOWFLAKE_CONNECTOR_AVAILABLE', False)
+    async def test_execute_snowflake_query_connector_unavailable(self):
+        """Test query when connector method requested but unavailable"""
+        result = await execute_snowflake_query("SELECT * FROM test")
+        assert result == []
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_CONNECTION_METHOD', 'api')
+    @patch('database.execute_snowflake_query_api')
+    async def test_execute_snowflake_query_api_method(self, mock_api_query):
+        """Test query routing to API method"""
+        mock_api_query.return_value = [{"id": 1, "name": "test"}]
+        
+        result = await execute_snowflake_query("SELECT * FROM test", "token")
+        
+        mock_api_query.assert_called_once_with("SELECT * FROM test", "token", True)
+        assert result == [{"id": 1, "name": "test"}]
+
+    @pytest.mark.asyncio
+    @patch('database._thread_pool')
+    @patch('database.get_cache_key')
+    @patch('database.get_from_cache')
+    @patch('database.set_in_cache')
+    async def test_execute_snowflake_query_connector_with_cache(self, mock_set_cache, mock_get_cache, mock_cache_key, mock_thread_pool):
+        """Test connector query with caching"""
+        mock_cache_key.return_value = "cache_key"
+        mock_get_cache.return_value = [{"cached": "result"}]
+        
+        result = await execute_snowflake_query_connector("SELECT * FROM test", True)
+        
+        assert result == [{"cached": "result"}]
+        mock_get_cache.assert_called_once_with("cache_key")
+
+    @pytest.mark.asyncio
+    @patch('database._thread_pool')
+    @patch('database._execute_connector_query_sync')
+    async def test_execute_snowflake_query_connector_execution(self, mock_sync_query, mock_thread_pool):
+        """Test connector query execution"""
+        import asyncio
+        
+        mock_sync_query.return_value = [{"id": 1, "name": "test"}]
+        
+        # Mock the thread pool execution
+        loop = asyncio.get_event_loop()
+        future = asyncio.Future()
+        future.set_result([{"id": 1, "name": "test"}])
+        loop.run_in_executor = AsyncMock(return_value=[{"id": 1, "name": "test"}])
+        
+        with patch('database.asyncio.get_event_loop', return_value=loop):
+            result = await execute_snowflake_query_connector("SELECT * FROM test", False)
+        
+        assert result == [{"id": 1, "name": "test"}]
+
+    @patch('database.get_connector_pool')
+    def test_execute_connector_query_sync(self, mock_get_pool):
+        """Test synchronous connector query execution"""
+        # Mock connection and cursor
+        mock_cursor = MagicMock()
+        mock_cursor.fetchall.return_value = [("value1", "2023-01-01T10:00:00")]
+        mock_cursor.description = [("col1",), ("CREATED",)]
+        
+        mock_connection = MagicMock()
+        mock_connection.cursor.return_value = mock_cursor
+        
+        mock_pool = MagicMock()
+        mock_pool.get_connection.return_value = mock_connection
+        mock_get_pool.return_value = mock_pool
+        
+        result = _execute_connector_query_sync("SELECT * FROM test")
+        
+        assert len(result) == 1
+        assert result[0]["col1"] == "value1"
+        assert result[0]["CREATED"] == "2023-01-01T10:00:00"
+        mock_cursor.close.assert_called_once()
+
+    @patch('database.get_connector_pool')
+    def test_execute_connector_query_sync_snowflake_error(self, mock_get_pool):
+        """Test synchronous connector query with Snowflake error"""
+        from database import SnowflakeError
+        
+        mock_pool = MagicMock()
+        mock_pool.get_connection.side_effect = SnowflakeError("Connection failed")
+        mock_get_pool.return_value = mock_pool
+        
+        with pytest.raises(SnowflakeError):
+            _execute_connector_query_sync("SELECT * FROM test")
+
+    @patch('database.get_connector_pool')
+    def test_execute_connector_query_sync_general_error(self, mock_get_pool):
+        """Test synchronous connector query with general error"""
+        mock_pool = MagicMock()
+        mock_pool.get_connection.side_effect = Exception("General error")
+        mock_get_pool.return_value = mock_pool
+        
+        with pytest.raises(Exception):
+            _execute_connector_query_sync("SELECT * FROM test")
+
+    @patch('database.get_connector_pool')
+    def test_execute_connector_query_sync_timestamp_handling(self, mock_get_pool):
+        """Test timestamp handling in synchronous connector query"""
+        from datetime import datetime
+        
+        # Mock connection and cursor with datetime object
+        mock_cursor = MagicMock()
+        timestamp_obj = datetime(2023, 1, 1, 10, 0, 0)
+        mock_cursor.fetchall.return_value = [("value1", timestamp_obj)]
+        mock_cursor.description = [("col1",), ("CREATED",)]
+        
+        mock_connection = MagicMock()
+        mock_connection.cursor.return_value = mock_cursor
+        
+        mock_pool = MagicMock()
+        mock_pool.get_connection.return_value = mock_connection
+        mock_get_pool.return_value = mock_pool
+        
+        result = _execute_connector_query_sync("SELECT * FROM test")
+        
+        assert len(result) == 1
+        assert result[0]["col1"] == "value1"
+        assert result[0]["CREATED"] == "2023-01-01T10:00:00"
+
+    @pytest.mark.asyncio
+    @patch('database._thread_pool')
+    @patch('database._execute_connector_query_sync')
+    async def test_execute_snowflake_query_connector_exception(self, mock_sync_query, mock_thread_pool):
+        """Test connector query execution with exception"""
+        import asyncio
+        
+        mock_sync_query.side_effect = Exception("Query failed")
+        
+        # Mock the thread pool execution
+        loop = asyncio.get_event_loop()
+        loop.run_in_executor = AsyncMock(side_effect=Exception("Query failed"))
+        
+        with patch('database.asyncio.get_event_loop', return_value=loop):
+            result = await execute_snowflake_query_connector("SELECT * FROM test", False)
+        
+        assert result == []
+
+
+class TestProcessLinksRows:
+    """Test cases for _process_links_rows helper function"""
+
+    def test_process_links_rows_basic(self):
+        """Test basic links processing"""
+        rows = [
+            {
+                "LINK_ID": "1",
+                "SOURCE": "100",
+                "DESTINATION": "200",
+                "SEQUENCE": 1,
+                "LINKNAME": "blocks",
+                "INWARD": "is blocked by",
+                "OUTWARD": "blocks",
+                "SOURCE_KEY": "PROJ-100",
+                "DESTINATION_KEY": "PROJ-200",
+                "SOURCE_SUMMARY": "Source issue",
+                "DESTINATION_SUMMARY": "Dest issue"
+            }
+        ]
+        
+        sanitized_ids = ["100", "200"]
+        links_data = {}
+        
+        _process_links_rows(rows, sanitized_ids, links_data)
+        
+        # Should have entries for both source and destination
+        assert "100" in links_data
+        assert "200" in links_data
+        
+        # Check source perspective (outward)
+        source_link = links_data["100"][0]
+        assert source_link["relationship"] == "outward"
+        assert source_link["related_issue_id"] == "200"
+        assert source_link["relationship_description"] == "blocks"
+        
+        # Check destination perspective (inward)
+        dest_link = links_data["200"][0]
+        assert dest_link["relationship"] == "inward"
+        assert dest_link["related_issue_id"] == "100"
+        assert dest_link["relationship_description"] == "is blocked by"
+
+    def test_process_links_rows_filtered_ids(self):
+        """Test links processing with filtered IDs"""
+        rows = [
+            {
+                "LINK_ID": "1",
+                "SOURCE": "100",
+                "DESTINATION": "200",
+                "SEQUENCE": 1,
+                "LINKNAME": "blocks",
+                "INWARD": "is blocked by",
+                "OUTWARD": "blocks",
+                "SOURCE_KEY": "PROJ-100",
+                "DESTINATION_KEY": "PROJ-200",
+                "SOURCE_SUMMARY": "Source issue",
+                "DESTINATION_SUMMARY": "Dest issue"
+            }
+        ]
+        
+        # Only include source ID in sanitized_ids
+        sanitized_ids = ["100"]
+        links_data = {}
+        
+        _process_links_rows(rows, sanitized_ids, links_data)
+        
+        # Should only have entry for source
+        assert "100" in links_data
+        assert "200" not in links_data
+        assert len(links_data["100"]) == 1
+
+    def test_process_links_rows_empty(self):
+        """Test links processing with empty input"""
+        rows = []
+        sanitized_ids = ["100"]
+        links_data = {}
+        
+        _process_links_rows(rows, sanitized_ids, links_data)
+        
+        assert len(links_data) == 0
+
+
+class TestConnectorMethodIntegration:
+    """Integration tests for connector method in existing functions"""
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_CONNECTION_METHOD', 'connector')
+    @patch('database.execute_snowflake_query')
+    async def test_get_issue_labels_connector_method(self, mock_query):
+        """Test get_issue_labels with connector method"""
+        # Mock connector returning dictionaries directly
+        mock_query.return_value = [
+            {"ISSUE": "123", "LABEL": "bug"},
+            {"ISSUE": "123", "LABEL": "urgent"}
+        ]
+        
+        result = await get_issue_labels(["123"], use_cache=False)
+        
+        assert "123" in result
+        assert result["123"] == ["bug", "urgent"]
+        mock_query.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_CONNECTION_METHOD', 'connector')
+    @patch('database.execute_snowflake_query')
+    async def test_get_issue_comments_connector_method(self, mock_query):
+        """Test get_issue_comments with connector method"""
+        mock_query.return_value = [
+            {
+                "ID": "1",
+                "ISSUEID": "123",
+                "ROLELEVEL": "user",
+                "BODY": "Test comment",
+                "CREATED": "2023-01-01T10:00:00",
+                "UPDATED": "2023-01-01T10:00:00"
+            }
+        ]
+        
+        result = await get_issue_comments(["123"], use_cache=False)
+        
+        assert "123" in result
+        assert len(result["123"]) == 1
+        assert result["123"][0]["body"] == "Test comment"
+
+    @pytest.mark.asyncio
+    @patch('database.SNOWFLAKE_CONNECTION_METHOD', 'connector')
+    @patch('database.execute_snowflake_query')
+    @patch('database._process_links_rows')
+    async def test_get_issue_links_connector_method(self, mock_process, mock_query):
+        """Test get_issue_links with connector method"""
+        mock_query.return_value = [{"LINK_ID": "1", "SOURCE": "100"}]
+        
+        result = await get_issue_links(["100"], use_cache=False)
+        
+        mock_query.assert_called_once()
+        mock_process.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch('database.cleanup_resources')
+    @patch('database._connector_pool')
+    async def test_cleanup_resources_with_connector(self, mock_connector_pool, mock_orig_cleanup):
+        """Test cleanup_resources includes connector pool cleanup"""
+        mock_pool = MagicMock()
+        
+        # Import and patch the module-level variable
+        import database
+        database._connector_pool = mock_pool
+        
+        await cleanup_resources()
+        
+        mock_pool.close.assert_called_once()

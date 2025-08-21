@@ -329,3 +329,90 @@ class TestPerformanceConfig:
         
         assert config.CACHE_MAX_SIZE == 5000
         assert config.CONCURRENT_QUERY_BATCH_SIZE == 1
+
+
+class TestConnectorConfig:
+    """Test cases for new connector configuration"""
+
+    @patch.dict('os.environ', {
+        'SNOWFLAKE_CONNECTION_METHOD': 'connector',
+        'SNOWFLAKE_ACCOUNT': 'test-account.snowflakecomputing.com',
+        'SNOWFLAKE_AUTHENTICATOR': 'snowflake_jwt',
+        'SNOWFLAKE_USER': 'test-user',
+        'SNOWFLAKE_PRIVATE_KEY_FILE': '/path/to/key.p8',
+        'SNOWFLAKE_PRIVATE_KEY_FILE_PWD': 'key-password',
+        'SNOWFLAKE_OAUTH_CLIENT_ID': 'client-id',
+        'SNOWFLAKE_OAUTH_CLIENT_SECRET': 'client-secret',
+        'SNOWFLAKE_OAUTH_TOKEN_URL': 'https://oauth.url',
+        'SNOWFLAKE_ROLE': 'test-role'
+    })
+    def test_connector_config_from_environment(self):
+        """Test connector configuration from environment variables"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_CONNECTION_METHOD == 'connector'
+        assert config.SNOWFLAKE_ACCOUNT == 'test-account.snowflakecomputing.com'
+        assert config.SNOWFLAKE_AUTHENTICATOR == 'snowflake_jwt'
+        assert config.SNOWFLAKE_USER == 'test-user'
+        assert config.SNOWFLAKE_PRIVATE_KEY_FILE == '/path/to/key.p8'
+        assert config.SNOWFLAKE_PRIVATE_KEY_FILE_PWD == 'key-password'
+        assert config.SNOWFLAKE_OAUTH_CLIENT_ID == 'client-id'
+        assert config.SNOWFLAKE_OAUTH_CLIENT_SECRET == 'client-secret'
+        assert config.SNOWFLAKE_OAUTH_TOKEN_URL == 'https://oauth.url'
+        assert config.SNOWFLAKE_ROLE == 'test-role'
+
+    @patch.dict('os.environ', {}, clear=True)
+    def test_connector_config_defaults(self):
+        """Test connector configuration defaults"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_CONNECTION_METHOD == 'api'
+        assert config.SNOWFLAKE_AUTHENTICATOR == 'snowflake'
+        assert config.SNOWFLAKE_ACCOUNT is None
+        assert config.SNOWFLAKE_USER is None
+        assert config.SNOWFLAKE_PASSWORD is None
+        assert config.SNOWFLAKE_ROLE is None
+        assert config.SNOWFLAKE_PRIVATE_KEY_FILE is None
+        assert config.SNOWFLAKE_PRIVATE_KEY_FILE_PWD is None
+        assert config.SNOWFLAKE_OAUTH_CLIENT_ID is None
+        assert config.SNOWFLAKE_OAUTH_CLIENT_SECRET is None
+        assert config.SNOWFLAKE_OAUTH_TOKEN_URL is None
+
+    @patch.dict('os.environ', {'SNOWFLAKE_CONNECTION_METHOD': 'CONNECTOR'})
+    def test_connection_method_case_insensitive(self):
+        """Test connection method is case insensitive in usage"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_CONNECTION_METHOD == 'CONNECTOR'
+        # Usage would be case-insensitive via .lower() in code
+
+    @patch.dict('os.environ', {'SNOWFLAKE_AUTHENTICATOR': 'SNOWFLAKE_JWT'})
+    def test_authenticator_case_insensitive(self):
+        """Test authenticator is case insensitive in usage"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_AUTHENTICATOR == 'SNOWFLAKE_JWT'
+        # Usage would be case-insensitive via .lower() in code
+
+    @patch.dict('os.environ', {
+        'SNOWFLAKE_ACCOUNT': '',
+        'SNOWFLAKE_USER': '',
+        'SNOWFLAKE_PASSWORD': ''
+    })
+    def test_empty_string_connector_variables(self):
+        """Test empty string connector environment variables"""
+        import importlib
+        import config
+        importlib.reload(config)
+        
+        assert config.SNOWFLAKE_ACCOUNT == ''
+        assert config.SNOWFLAKE_USER == ''
+        assert config.SNOWFLAKE_PASSWORD == ''

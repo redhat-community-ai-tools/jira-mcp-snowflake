@@ -11,12 +11,31 @@ import httpx
 from cachetools import TTLCache
 from asyncio_throttle import Throttler
 
+try:
+    import snowflake.connector
+    from snowflake.connector.errors import Error as SnowflakeError
+    SNOWFLAKE_CONNECTOR_AVAILABLE = True
+except ImportError:
+    SNOWFLAKE_CONNECTOR_AVAILABLE = False
+    SnowflakeError = Exception
+
 from config import (
     SNOWFLAKE_BASE_URL,
+    SNOWFLAKE_ACCOUNT,
     SNOWFLAKE_DATABASE,
     SNOWFLAKE_SCHEMA,
     SNOWFLAKE_TOKEN,
     SNOWFLAKE_WAREHOUSE,
+    SNOWFLAKE_USER,
+    SNOWFLAKE_PASSWORD,
+    SNOWFLAKE_ROLE,
+    SNOWFLAKE_CONNECTION_METHOD,
+    SNOWFLAKE_AUTHENTICATOR,
+    SNOWFLAKE_PRIVATE_KEY_FILE,
+    SNOWFLAKE_PRIVATE_KEY_FILE_PWD,
+    SNOWFLAKE_OAUTH_CLIENT_ID,
+    SNOWFLAKE_OAUTH_CLIENT_SECRET,
+    SNOWFLAKE_OAUTH_TOKEN_URL,
     ENABLE_CACHING,
     CACHE_TTL_SECONDS,
     CACHE_MAX_SIZE,
@@ -84,6 +103,110 @@ def get_connection_pool() -> SnowflakeConnectionPool:
     return _connection_pool
 
 
+class SnowflakeConnectorPool:
+    """Connection pool for Snowflake connector-based connections"""
+
+    def __init__(self):
+        self._connection = None
+        self._lock = threading.RLock()
+
+    def _build_connection_params(self) -> Dict[str, Any]:
+        """Build connection parameters based on configuration"""
+        if not SNOWFLAKE_CONNECTOR_AVAILABLE:
+            raise ImportError("snowflake-connector-python is not installed")
+
+        if not SNOWFLAKE_ACCOUNT:
+            raise ValueError("SNOWFLAKE_ACCOUNT is required for connector-based connections")
+
+        conn_params = {
+            'account': SNOWFLAKE_ACCOUNT,
+            'database': SNOWFLAKE_DATABASE,
+            'schema': SNOWFLAKE_SCHEMA,
+            'warehouse': SNOWFLAKE_WAREHOUSE,
+        }
+
+        if SNOWFLAKE_ROLE:
+            conn_params['role'] = SNOWFLAKE_ROLE
+
+        # Authentication methods
+        if SNOWFLAKE_AUTHENTICATOR.lower() == 'snowflake_jwt':
+            # Key pair authentication
+            conn_params['authenticator'] = 'SNOWFLAKE_JWT'
+            conn_params['user'] = SNOWFLAKE_USER
+            if SNOWFLAKE_PRIVATE_KEY_FILE:
+                conn_params['private_key_file'] = SNOWFLAKE_PRIVATE_KEY_FILE
+                if SNOWFLAKE_PRIVATE_KEY_FILE_PWD:
+                    conn_params['private_key_file_pwd'] = SNOWFLAKE_PRIVATE_KEY_FILE_PWD
+            else:
+                raise ValueError("SNOWFLAKE_PRIVATE_KEY_FILE is required for JWT authentication")
+
+        elif SNOWFLAKE_AUTHENTICATOR.lower() == 'oauth_client_credentials':
+            # OAuth client credentials flow
+            conn_params['authenticator'] = 'OAUTH_CLIENT_CREDENTIALS'
+            if SNOWFLAKE_OAUTH_CLIENT_ID and SNOWFLAKE_OAUTH_CLIENT_SECRET:
+                conn_params['oauth_client_id'] = SNOWFLAKE_OAUTH_CLIENT_ID
+                conn_params['oauth_client_secret'] = SNOWFLAKE_OAUTH_CLIENT_SECRET
+                if SNOWFLAKE_OAUTH_TOKEN_URL:
+                    conn_params['oauth_token_request_url'] = SNOWFLAKE_OAUTH_TOKEN_URL
+            else:
+                raise ValueError("SNOWFLAKE_OAUTH_CLIENT_ID and SNOWFLAKE_OAUTH_CLIENT_SECRET are required for OAuth")
+
+        elif SNOWFLAKE_AUTHENTICATOR.lower() == 'oauth':
+            # OAuth with existing access token
+            from config import SNOWFLAKE_TOKEN
+            conn_params['authenticator'] = 'OAUTH'
+            if SNOWFLAKE_TOKEN:
+                conn_params['token'] = SNOWFLAKE_TOKEN
+            else:
+                raise ValueError("SNOWFLAKE_TOKEN is required for OAuth token authentication")
+
+        else:
+            # Default snowflake authentication
+            conn_params['user'] = SNOWFLAKE_USER
+            conn_params['password'] = SNOWFLAKE_PASSWORD
+            if not SNOWFLAKE_USER or not SNOWFLAKE_PASSWORD:
+                raise ValueError("SNOWFLAKE_USER and SNOWFLAKE_PASSWORD are required for default authentication")
+
+        return conn_params
+
+    def get_connection(self):
+        """Get or create a Snowflake connection"""
+        with self._lock:
+            if self._connection is None or self._connection.is_closed():
+                try:
+                    conn_params = self._build_connection_params()
+                    self._connection = snowflake.connector.connect(**conn_params)
+                    logger.info(f"Created new Snowflake connector connection to {SNOWFLAKE_ACCOUNT}")
+                except Exception as e:
+                    logger.error(f"Failed to create Snowflake connection: {str(e)}")
+                    raise
+            return self._connection
+
+    def close(self):
+        """Close the Snowflake connection"""
+        with self._lock:
+            if self._connection and not self._connection.is_closed():
+                try:
+                    self._connection.close()
+                    logger.info("Closed Snowflake connector connection")
+                except Exception as e:
+                    logger.error(f"Error closing Snowflake connection: {str(e)}")
+                finally:
+                    self._connection = None
+
+
+# Global connector pool
+_connector_pool = None
+
+
+def get_connector_pool() -> SnowflakeConnectorPool:
+    """Get the global connector pool instance"""
+    global _connector_pool
+    if _connector_pool is None:
+        _connector_pool = SnowflakeConnectorPool()
+    return _connector_pool
+
+
 def get_cache_key(operation: str, **kwargs) -> str:
     """Generate a cache key for the given operation and parameters"""
     key_parts = [operation]
@@ -122,6 +245,8 @@ async def cleanup_resources():
     """Cleanup global resources"""
     if _connection_pool:
         await _connection_pool.close()
+    if _connector_pool:
+        _connector_pool.close()
     if _thread_pool:
         _thread_pool.shutdown(wait=True)
     clear_cache()
@@ -205,12 +330,119 @@ async def make_snowflake_request(
         return None
 
 
+async def execute_snowflake_query_connector(
+    sql: str,
+    use_cache: bool = True
+) -> List[Dict[str, Any]]:
+    """Execute a SQL query using snowflake.connector"""
+    start_time = time.time()
+    success = False
+
+    # Check cache for SELECT queries
+    cache_key = None
+    if use_cache and sql.strip().upper().startswith('SELECT'):
+        cache_key = get_cache_key("sql_query_connector", sql=sql)
+        cached_result = get_from_cache(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Cache hit for connector SQL query: {sql[:50]}...")
+            track_snowflake_query(start_time, True)
+            return cached_result
+
+    try:
+        # Execute in thread pool to avoid blocking async event loop
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(_thread_pool, _execute_connector_query_sync, sql)
+
+        success = True
+
+        # Cache successful SELECT results
+        if use_cache and cache_key and result is not None:
+            set_in_cache(cache_key, result)
+            logger.debug(f"Cached connector SQL result: {sql[:50]}...")
+
+        return result if result is not None else []
+
+    except Exception as e:
+        logger.error(f"Error executing Snowflake connector query: {str(e)}")
+        logger.error(f"Query that failed: {sql}")
+        return []
+    finally:
+        track_snowflake_query(start_time, success)
+
+
+def _execute_connector_query_sync(sql: str) -> List[Dict[str, Any]]:
+    """Execute query synchronously using snowflake.connector"""
+    try:
+        pool = get_connector_pool()
+        conn = pool.get_connection()
+
+        logger.info(f"Executing Snowflake connector query: {sql[:100]}...")
+
+        cursor = conn.cursor()
+        cursor.execute(sql)
+
+        # Fetch results
+        results = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description] if cursor.description else []
+
+        logger.info(f"Successfully got {len(results)} rows from Snowflake connector")
+
+        # Convert to list of dictionaries
+        formatted_results = []
+        for row in results:
+            row_dict = {}
+            for i, value in enumerate(row):
+                if i < len(columns):
+                    column_name = columns[i]
+                    # Handle timestamp conversion
+                    timestamp_columns = {
+                        'CREATED', 'UPDATED', 'DUEDATE', 'RESOLUTIONDATE',
+                        'ARCHIVEDDATE', '_FIVETRAN_SYNCED'
+                    }
+                    if column_name.upper() in timestamp_columns and value:
+                        if hasattr(value, 'isoformat'):
+                            row_dict[column_name] = value.isoformat()
+                        else:
+                            row_dict[column_name] = str(value)
+                    else:
+                        row_dict[column_name] = value
+            formatted_results.append(row_dict)
+
+        cursor.close()
+        return formatted_results
+
+    except SnowflakeError as e:
+        logger.error(f"Snowflake connector error: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in connector query: {str(e)}")
+        raise
+
+
 async def execute_snowflake_query(
     sql: str,
     snowflake_token: Optional[str] = None,
     use_cache: bool = True
 ) -> List[Dict[str, Any]]:
     """Execute a SQL query against Snowflake and return results with caching"""
+
+    # Route to appropriate connection method
+    if SNOWFLAKE_CONNECTION_METHOD.lower() == "connector":
+        if not SNOWFLAKE_CONNECTOR_AVAILABLE:
+            logger.error("Snowflake connector method requested but snowflake-connector-python is not available")
+            return []
+        return await execute_snowflake_query_connector(sql, use_cache)
+    else:
+        # Default to API method
+        return await execute_snowflake_query_api(sql, snowflake_token, use_cache)
+
+
+async def execute_snowflake_query_api(
+    sql: str,
+    snowflake_token: Optional[str] = None,
+    use_cache: bool = True
+) -> List[Dict[str, Any]]:
+    """Execute a SQL query against Snowflake API and return results with caching"""
     start_time = time.time()
     success = False
 
@@ -466,18 +698,28 @@ async def get_issue_labels(issue_ids: List[str], snowflake_token: Optional[str] 
         WHERE ISSUE IN ({ids_str}) AND LABEL IS NOT NULL
         """
 
-        rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
-        columns = ["ISSUE", "LABEL"]
+        if SNOWFLAKE_CONNECTION_METHOD.lower() == "connector":
+            rows = await execute_snowflake_query(sql, None, use_cache)
+            # Connector method returns dictionaries already
+            for row in rows:
+                issue_id = str(row.get("ISSUE"))
+                label = row.get("LABEL")
+                if issue_id and label:
+                    if issue_id not in labels_data:
+                        labels_data[issue_id] = []
+                    labels_data[issue_id].append(label)
+        else:
+            rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
+            columns = ["ISSUE", "LABEL"]
+            for row in rows:
+                row_dict = format_snowflake_row(row, columns)
+                issue_id = str(row_dict.get("ISSUE"))
+                label = row_dict.get("LABEL")
 
-        for row in rows:
-            row_dict = format_snowflake_row(row, columns)
-            issue_id = str(row_dict.get("ISSUE"))
-            label = row_dict.get("LABEL")
-
-            if issue_id and label:
-                if issue_id not in labels_data:
-                    labels_data[issue_id] = []
-                labels_data[issue_id].append(label)
+                if issue_id and label:
+                    if issue_id not in labels_data:
+                        labels_data[issue_id] = []
+                    labels_data[issue_id].append(label)
 
         # Cache the result
         if use_cache:
@@ -526,25 +768,41 @@ async def get_issue_comments(issue_ids: List[str], snowflake_token: Optional[str
         ORDER BY ISSUEID, CREATED ASC
         """
 
-        rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
-        columns = ["ID", "ISSUEID", "ROLELEVEL", "BODY", "CREATED", "UPDATED"]
+        if SNOWFLAKE_CONNECTION_METHOD.lower() == "connector":
+            rows = await execute_snowflake_query(sql, None, use_cache)
+            # Connector method returns dictionaries already
+            for row in rows:
+                issue_id = str(row.get("ISSUEID"))
+                if issue_id:
+                    if issue_id not in comments_data:
+                        comments_data[issue_id] = []
+                    comment = {
+                        "id": row.get("ID"),
+                        "role_level": row.get("ROLELEVEL"),
+                        "body": row.get("BODY"),
+                        "created": row.get("CREATED"),
+                        "updated": row.get("UPDATED")
+                    }
+                    comments_data[issue_id].append(comment)
+        else:
+            rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
+            columns = ["ID", "ISSUEID", "ROLELEVEL", "BODY", "CREATED", "UPDATED"]
+            for row in rows:
+                row_dict = format_snowflake_row(row, columns)
+                issue_id = str(row_dict.get("ISSUEID"))
 
-        for row in rows:
-            row_dict = format_snowflake_row(row, columns)
-            issue_id = str(row_dict.get("ISSUEID"))
+                if issue_id:
+                    if issue_id not in comments_data:
+                        comments_data[issue_id] = []
 
-            if issue_id:
-                if issue_id not in comments_data:
-                    comments_data[issue_id] = []
-
-                comment = {
-                    "id": row_dict.get("ID"),
-                    "role_level": row_dict.get("ROLELEVEL"),
-                    "body": row_dict.get("BODY"),
-                    "created": row_dict.get("CREATED"),
-                    "updated": row_dict.get("UPDATED")
-                }
-                comments_data[issue_id].append(comment)
+                    comment = {
+                        "id": row_dict.get("ID"),
+                        "role_level": row_dict.get("ROLELEVEL"),
+                        "body": row_dict.get("BODY"),
+                        "created": row_dict.get("CREATED"),
+                        "updated": row_dict.get("UPDATED")
+                    }
+                    comments_data[issue_id].append(comment)
 
         # Cache the result
         if use_cache:
@@ -555,6 +813,52 @@ async def get_issue_comments(issue_ids: List[str], snowflake_token: Optional[str
         logger.error(f"Error fetching comments: {str(e)}")
 
     return comments_data
+
+
+def _process_links_rows(rows: List[Dict[str, Any]], sanitized_ids: List[str], links_data: Dict[str, List[Dict[str, Any]]], use_dict_rows: bool = True) -> None:
+    """Helper function to process link rows for both connector and API methods"""
+    for row_dict in rows:
+        source_id = str(row_dict.get("SOURCE"))
+        destination_id = str(row_dict.get("DESTINATION"))
+
+        # Create link object
+        link = {
+            "link_id": row_dict.get("LINK_ID"),
+            "source_id": source_id,
+            "destination_id": destination_id,
+            "sequence": row_dict.get("SEQUENCE"),
+            "link_type": row_dict.get("LINKNAME"),
+            "inward_description": row_dict.get("INWARD"),
+            "outward_description": row_dict.get("OUTWARD"),
+            "source_key": row_dict.get("SOURCE_KEY"),
+            "destination_key": row_dict.get("DESTINATION_KEY"),
+            "source_summary": row_dict.get("SOURCE_SUMMARY"),
+            "destination_summary": row_dict.get("DESTINATION_SUMMARY")
+        }
+
+        # Add to both source and destination issue data
+        for issue_id in [source_id, destination_id]:
+            if issue_id in sanitized_ids:
+                if issue_id not in links_data:
+                    links_data[issue_id] = []
+
+                # Determine relationship direction for this issue
+                if issue_id == source_id:
+                    link_copy = link.copy()
+                    link_copy["relationship"] = "outward"
+                    link_copy["related_issue_id"] = destination_id
+                    link_copy["related_issue_key"] = row_dict.get("DESTINATION_KEY")
+                    link_copy["related_issue_summary"] = row_dict.get("DESTINATION_SUMMARY")
+                    link_copy["relationship_description"] = row_dict.get("OUTWARD")
+                else:
+                    link_copy = link.copy()
+                    link_copy["relationship"] = "inward"
+                    link_copy["related_issue_id"] = source_id
+                    link_copy["related_issue_key"] = row_dict.get("SOURCE_KEY")
+                    link_copy["related_issue_summary"] = row_dict.get("SOURCE_SUMMARY")
+                    link_copy["relationship_description"] = row_dict.get("INWARD")
+
+                links_data[issue_id].append(link_copy)
 
 
 async def get_issue_links(issue_ids: List[str], snowflake_token: Optional[str] = None, use_cache: bool = True) -> Dict[str, List[Dict[str, Any]]]:
@@ -610,56 +914,22 @@ async def get_issue_links(issue_ids: List[str], snowflake_token: Optional[str] =
         ORDER BY il.SOURCE, il.SEQUENCE
         """
 
-        rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
-        columns = [
-            "LINK_ID", "SOURCE", "DESTINATION", "SEQUENCE", "LINKNAME",
-            "INWARD", "OUTWARD", "SOURCE_KEY", "DESTINATION_KEY",
-            "SOURCE_SUMMARY", "DESTINATION_SUMMARY"
-        ]
-
-        for row in rows:
-            row_dict = format_snowflake_row(row, columns)
-            source_id = str(row_dict.get("SOURCE"))
-            destination_id = str(row_dict.get("DESTINATION"))
-
-            # Create link object
-            link = {
-                "link_id": row_dict.get("LINK_ID"),
-                "source_id": source_id,
-                "destination_id": destination_id,
-                "sequence": row_dict.get("SEQUENCE"),
-                "link_type": row_dict.get("LINKNAME"),
-                "inward_description": row_dict.get("INWARD"),
-                "outward_description": row_dict.get("OUTWARD"),
-                "source_key": row_dict.get("SOURCE_KEY"),
-                "destination_key": row_dict.get("DESTINATION_KEY"),
-                "source_summary": row_dict.get("SOURCE_SUMMARY"),
-                "destination_summary": row_dict.get("DESTINATION_SUMMARY")
-            }
-
-            # Add to both source and destination issue data
-            for issue_id in [source_id, destination_id]:
-                if issue_id in sanitized_ids:
-                    if issue_id not in links_data:
-                        links_data[issue_id] = []
-
-                    # Determine relationship direction for this issue
-                    if issue_id == source_id:
-                        link_copy = link.copy()
-                        link_copy["relationship"] = "outward"
-                        link_copy["related_issue_id"] = destination_id
-                        link_copy["related_issue_key"] = row_dict.get("DESTINATION_KEY")
-                        link_copy["related_issue_summary"] = row_dict.get("DESTINATION_SUMMARY")
-                        link_copy["relationship_description"] = row_dict.get("OUTWARD")
-                    else:
-                        link_copy = link.copy()
-                        link_copy["relationship"] = "inward"
-                        link_copy["related_issue_id"] = source_id
-                        link_copy["related_issue_key"] = row_dict.get("SOURCE_KEY")
-                        link_copy["related_issue_summary"] = row_dict.get("SOURCE_SUMMARY")
-                        link_copy["relationship_description"] = row_dict.get("INWARD")
-
-                    links_data[issue_id].append(link_copy)
+        if SNOWFLAKE_CONNECTION_METHOD.lower() == "connector":
+            rows = await execute_snowflake_query(sql, None, use_cache)
+            # Connector method returns dictionaries already
+            _process_links_rows(rows, sanitized_ids, links_data, use_dict_rows=True)
+        else:
+            rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
+            columns = [
+                "LINK_ID", "SOURCE", "DESTINATION", "SEQUENCE", "LINKNAME",
+                "INWARD", "OUTWARD", "SOURCE_KEY", "DESTINATION_KEY",
+                "SOURCE_SUMMARY", "DESTINATION_SUMMARY"
+            ]
+            # API method returns list of lists, need to format
+            formatted_rows = []
+            for row in rows:
+                formatted_rows.append(format_snowflake_row(row, columns))
+            _process_links_rows(formatted_rows, sanitized_ids, links_data, use_dict_rows=True)
 
         # Cache the result
         if use_cache:

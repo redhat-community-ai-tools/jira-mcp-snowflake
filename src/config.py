@@ -13,12 +13,27 @@ MCP_TRANSPORT = os.environ.get("MCP_TRANSPORT", "stdio")
 FASTMCP_HOST = os.environ.get("FASTMCP_HOST", "0.0.0.0")
 FASTMCP_PORT = os.environ.get("FASTMCP_PORT", "8000")
 
-# Snowflake API configuration from environment variables
+# Snowflake configuration from environment variables
 SNOWFLAKE_BASE_URL = os.environ.get("SNOWFLAKE_BASE_URL")
+SNOWFLAKE_ACCOUNT = os.environ.get("SNOWFLAKE_ACCOUNT")
 SNOWFLAKE_DATABASE = os.environ.get("SNOWFLAKE_DATABASE")
 SNOWFLAKE_SCHEMA = os.environ.get("SNOWFLAKE_SCHEMA")
 SNOWFLAKE_WAREHOUSE = os.environ.get("SNOWFLAKE_WAREHOUSE", "DEFAULT")
+SNOWFLAKE_USER = os.environ.get("SNOWFLAKE_USER")
+SNOWFLAKE_PASSWORD = os.environ.get("SNOWFLAKE_PASSWORD")
+SNOWFLAKE_ROLE = os.environ.get("SNOWFLAKE_ROLE")
 INTERNAL_GATEWAY = os.environ.get("INTERNAL_GATEWAY", "false")
+
+# Connection method: "api" (REST API) or "connector" (snowflake.connector)
+SNOWFLAKE_CONNECTION_METHOD = os.environ.get("SNOWFLAKE_CONNECTION_METHOD", "api")
+
+# Service account authentication for snowflake.connector
+SNOWFLAKE_AUTHENTICATOR = os.environ.get("SNOWFLAKE_AUTHENTICATOR", "snowflake")
+SNOWFLAKE_PRIVATE_KEY_FILE = os.environ.get("SNOWFLAKE_PRIVATE_KEY_FILE")
+SNOWFLAKE_PRIVATE_KEY_FILE_PWD = os.environ.get("SNOWFLAKE_PRIVATE_KEY_FILE_PWD")
+SNOWFLAKE_OAUTH_CLIENT_ID = os.environ.get("SNOWFLAKE_OAUTH_CLIENT_ID")
+SNOWFLAKE_OAUTH_CLIENT_SECRET = os.environ.get("SNOWFLAKE_OAUTH_CLIENT_SECRET")
+SNOWFLAKE_OAUTH_TOKEN_URL = os.environ.get("SNOWFLAKE_OAUTH_TOKEN_URL")
 
 # Snowflake token handling - for stdio transport, get from environment
 # For other transports, it will be retrieved from request context in tools layer
