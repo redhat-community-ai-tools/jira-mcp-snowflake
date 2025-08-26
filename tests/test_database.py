@@ -20,6 +20,7 @@ from database import (  # noqa: E402
     get_issue_labels,
     get_issue_comments,
     get_issue_links,
+    get_issue_status_changes,
     get_issue_enrichment_data_concurrent,
     execute_queries_in_batches,
     format_snowflake_rows_concurrent,
@@ -294,15 +295,15 @@ class TestParseSnowflakeTimestamp:
         timestamp_str = "1753767533.658000000 1440"
         result = parse_snowflake_timestamp(timestamp_str)
 
-        # Should convert to ISO format with timezone offset applied
-        assert result == "2025-07-30T05:38:53.658000+00:00"
+        # Should convert to simplified format with timezone offset applied
+        assert result == "2025-07-30T05:38:53"
 
     def test_parse_timestamp_different_offsets(self):
         """Test parsing timestamps with different timezone offsets"""
         test_cases = [
-            ("1753767533.658000000 1440", "2025-07-30T05:38:53.658000+00:00"),  # +24 hours
-            ("1753767533.658000000 0", "2025-07-29T05:38:53.658000+00:00"),     # no offset
-            ("1753767533.658000000 -300", "2025-07-29T00:38:53.658000+00:00"),  # -5 hours
+            ("1753767533.658000000 1440", "2025-07-30T05:38:53"),  # +24 hours
+            ("1753767533.658000000 0", "2025-07-29T05:38:53"),     # no offset
+            ("1753767533.658000000 -300", "2025-07-29T00:38:53"),  # -5 hours
         ]
 
         for input_timestamp, expected_output in test_cases:
@@ -314,8 +315,8 @@ class TestParseSnowflakeTimestamp:
         timestamp_str = "1753767533.658000000"
         result = parse_snowflake_timestamp(timestamp_str)
 
-        # Should convert to UTC ISO format
-        assert result == "2025-07-29T05:38:53.658000+00:00"
+        # Should convert to simplified format
+        assert result == "2025-07-29T05:38:53"
 
     def test_parse_timestamp_integer_seconds(self):
         """Test parsing timestamp with integer seconds"""
@@ -323,7 +324,7 @@ class TestParseSnowflakeTimestamp:
         result = parse_snowflake_timestamp(timestamp_str)
 
         # Should handle integer timestamps
-        assert result == "2025-07-30T05:38:53+00:00"
+        assert result == "2025-07-30T05:38:53"
 
     def test_parse_timestamp_none_input(self):
         """Test parsing None input"""
@@ -359,17 +360,17 @@ class TestParseSnowflakeTimestamp:
         result = parse_snowflake_timestamp(timestamp_str)
 
         # Function should parse the first two parts and ignore extra data
-        assert result == "2025-07-30T05:38:53.658000+00:00"
+        assert result == "2025-07-30T05:38:53"
 
     def test_parse_timestamp_edge_cases(self):
         """Test parsing edge case timestamps"""
         test_cases = [
             # Very large offset
-            ("1753767533.658000000 43200", "2025-08-28T05:38:53.658000+00:00"),  # +30 days
+            ("1753767533.658000000 43200", "2025-08-28T05:38:53"),  # +30 days
             # Negative large offset
-            ("1753767533.658000000 -43200", "2025-06-29T05:38:53.658000+00:00"),  # -30 days
+            ("1753767533.658000000 -43200", "2025-06-29T05:38:53"),  # -30 days
             # Zero timestamp
-            ("0.0 0", "1970-01-01T00:00:00+00:00"),
+            ("0.0 0", "1970-01-01T00:00:00"),
         ]
 
         for input_timestamp, expected_output in test_cases:
@@ -417,9 +418,24 @@ class TestFormatSnowflakeRow:
 
         expected = {
             "ID": "123",
-            "CREATED": "2025-07-30T05:38:53.658000+00:00",
-            "RESOLUTIONDATE": "2025-07-30T21:23:31.261000+00:00",
+            "CREATED": "2025-07-30T05:38:53",
+            "RESOLUTIONDATE": "2025-07-30T21:23:31",
             "SUMMARY": "regular_value"
+        }
+        assert result == expected
+
+    def test_format_with_change_timestamp_column(self):
+        """Test formatting with CHANGE_TIMESTAMP column specifically"""
+        row_data = ["ITBEAKER-549", "1751291507.768000000", "New", "In Progress"]
+        columns = ["ISSUE_KEY", "CHANGE_TIMESTAMP", "FROM_STATUS", "TO_STATUS"]
+
+        result = format_snowflake_row(row_data, columns)
+
+        expected = {
+            "ISSUE_KEY": "ITBEAKER-549",
+            "CHANGE_TIMESTAMP": "2025-06-30T13:51:47",
+            "FROM_STATUS": "New",
+            "TO_STATUS": "In Progress"
         }
         assert result == expected
 
@@ -460,8 +476,8 @@ class TestFormatSnowflakeRow:
         result = format_snowflake_row(row_data, columns)
 
         # Should still parse timestamps regardless of case
-        assert "2025-07-30T05:38:53.658000+00:00" in result["created"]
-        assert "2025-07-30T21:23:31.261000+00:00" in result["Updated"]
+        assert "2025-07-30T05:38:53" in result["created"]
+        assert "2025-07-30T21:23:31" in result["Updated"]
 
 
 class TestGetIssueLabels:
@@ -672,6 +688,105 @@ class TestGetIssueLinks:
         assert result == {}
 
 
+class TestGetIssueStatusChanges:
+    """Test cases for get_issue_status_changes function"""
+
+    @pytest.mark.asyncio
+    @patch('database.execute_snowflake_query')
+    @patch('database.format_snowflake_row')
+    async def test_get_status_changes_success(self, mock_format, mock_query):
+        """Test successful status change retrieval"""
+        mock_query.return_value = [
+            ["ITBEAKER-549", "2025-02-20 15:22:08.961 Z", "New", "In Progress", "New → In Progress"],
+            ["ITBEAKER-549", "2025-03-05 13:51:54.818 Z", "In Progress", "Closed", "In Progress → Closed"]
+        ]
+
+        mock_format.side_effect = [
+            {
+                "ISSUE_KEY": "ITBEAKER-549",
+                "CHANGE_TIMESTAMP": "2025-02-20 15:22:08.961 Z",
+                "FROM_STATUS": "New",
+                "TO_STATUS": "In Progress",
+                "STATUS_TRANSITION": "New → In Progress"
+            },
+            {
+                "ISSUE_KEY": "ITBEAKER-549",
+                "CHANGE_TIMESTAMP": "2025-03-05 13:51:54.818 Z",
+                "FROM_STATUS": "In Progress",
+                "TO_STATUS": "Closed",
+                "STATUS_TRANSITION": "In Progress → Closed"
+            }
+        ]
+
+        result = await get_issue_status_changes(["123"], "token")
+
+        assert "ITBEAKER-549" in result
+        assert len(result["ITBEAKER-549"]) == 2
+        
+        # Check first status change
+        first_change = result["ITBEAKER-549"][0]
+        assert first_change["issue_key"] == "ITBEAKER-549"
+        assert first_change["from_status"] == "New"
+        assert first_change["to_status"] == "In Progress"
+        assert first_change["status_transition"] == "New → In Progress"
+        
+        # Check second status change
+        second_change = result["ITBEAKER-549"][1]
+        assert second_change["from_status"] == "In Progress"
+        assert second_change["to_status"] == "Closed"
+
+    @pytest.mark.asyncio
+    @patch('database.execute_snowflake_query')
+    @patch('database.clear_cache')
+    async def test_get_status_changes_connector_method(self, mock_clear_cache, mock_query):
+        """Test status change retrieval with connector method"""
+        mock_clear_cache()  # Clear cache before test
+        with patch('database.SNOWFLAKE_CONNECTION_METHOD', 'connector'):
+            mock_query.return_value = [
+                {
+                    "ISSUE_KEY": "ITBEAKER-549",
+                    "CHANGE_TIMESTAMP": "2025-02-20 15:22:08.961 Z",
+                    "FROM_STATUS": "New",
+                    "TO_STATUS": "In Progress",
+                    "STATUS_TRANSITION": "New → In Progress"
+                }
+            ]
+
+            result = await get_issue_status_changes(["123"], None, use_cache=False)
+
+            assert "ITBEAKER-549" in result
+            assert len(result["ITBEAKER-549"]) == 1
+            change = result["ITBEAKER-549"][0]
+            assert change["from_status"] == "New"
+            assert change["to_status"] == "In Progress"
+
+    @pytest.mark.asyncio
+    async def test_get_status_changes_empty_input(self):
+        """Test with empty issue IDs list"""
+        result = await get_issue_status_changes([], "token")
+        assert result == {}
+
+    @pytest.mark.asyncio
+    @patch('database.execute_snowflake_query')
+    async def test_get_status_changes_invalid_ids(self, mock_query):
+        """Test with invalid issue IDs"""
+        result = await get_issue_status_changes(["invalid", "abc"], "token")
+        assert result == {}
+        # Should not call query with invalid IDs
+        mock_query.assert_not_called()
+
+    @pytest.mark.asyncio
+    @patch('database.execute_snowflake_query')
+    @patch('database.clear_cache')
+    async def test_get_status_changes_exception(self, mock_clear_cache, mock_query):
+        """Test exception handling"""
+        mock_clear_cache()  # Clear cache before test
+        mock_query.side_effect = Exception("Database error")
+
+        result = await get_issue_status_changes(["123"], "token", use_cache=False)
+        assert result == {}
+
+
 class TestCacheFunctionality:
     """Test cases for caching functionality"""
 
@@ -851,50 +966,58 @@ class TestConcurrentFunctions:
     @patch('database.get_issue_labels')
     @patch('database.get_issue_comments') 
     @patch('database.get_issue_links')
-    async def test_get_issue_enrichment_data_concurrent_success(self, mock_links, mock_comments, mock_labels):
+    @patch('database.get_issue_status_changes')
+    async def test_get_issue_enrichment_data_concurrent_success(self, mock_status_changes, mock_links, mock_comments, mock_labels):
         """Test successful concurrent data enrichment"""
         # Setup mocks
         mock_labels.return_value = {"123": ["bug", "urgent"]}
         mock_comments.return_value = {"123": [{"id": "c1", "body": "comment"}]}
         mock_links.return_value = {"123": [{"id": "l1", "type": "blocks"}]}
+        mock_status_changes.return_value = {"TEST-123": [{"from_status": "New", "to_status": "In Progress"}]}
         
-        labels, comments, links = await get_issue_enrichment_data_concurrent(["123"], "token")
+        labels, comments, links, status_changes = await get_issue_enrichment_data_concurrent(["123"], "token")
         
         assert labels == {"123": ["bug", "urgent"]}
         assert comments == {"123": [{"id": "c1", "body": "comment"}]}
         assert links == {"123": [{"id": "l1", "type": "blocks"}]}
+        assert status_changes == {"TEST-123": [{"from_status": "New", "to_status": "In Progress"}]}
         
         # Verify all functions were called concurrently
         mock_labels.assert_called_once_with(["123"], "token", True)
         mock_comments.assert_called_once_with(["123"], "token", True)
         mock_links.assert_called_once_with(["123"], "token", True)
+        mock_status_changes.assert_called_once_with(["123"], "token", True)
 
     @pytest.mark.asyncio
     async def test_get_issue_enrichment_data_concurrent_empty_input(self):
         """Test concurrent data enrichment with empty input"""
-        labels, comments, links = await get_issue_enrichment_data_concurrent([], "token")
+        labels, comments, links, status_changes = await get_issue_enrichment_data_concurrent([], "token")
         
         assert labels == {}
         assert comments == {}
         assert links == {}
+        assert status_changes == {}
 
     @pytest.mark.asyncio
     @patch('database.get_issue_labels')
     @patch('database.get_issue_comments') 
     @patch('database.get_issue_links')
-    async def test_get_issue_enrichment_data_concurrent_with_exception(self, mock_links, mock_comments, mock_labels):
+    @patch('database.get_issue_status_changes')
+    async def test_get_issue_enrichment_data_concurrent_with_exception(self, mock_status_changes, mock_links, mock_comments, mock_labels):
         """Test concurrent data enrichment with one function failing"""
         # Setup mocks - one fails, others succeed
         mock_labels.side_effect = Exception("Labels error")
         mock_comments.return_value = {"123": [{"id": "c1", "body": "comment"}]}
         mock_links.return_value = {"123": [{"id": "l1", "type": "blocks"}]}
+        mock_status_changes.return_value = {"TEST-123": [{"from_status": "New", "to_status": "In Progress"}]}
         
-        labels, comments, links = await get_issue_enrichment_data_concurrent(["123"], "token")
+        labels, comments, links, status_changes = await get_issue_enrichment_data_concurrent(["123"], "token")
         
         # Failed operation should return empty dict
         assert labels == {}
         assert comments == {"123": [{"id": "c1", "body": "comment"}]}
         assert links == {"123": [{"id": "l1", "type": "blocks"}]}
+        assert status_changes == {"TEST-123": [{"from_status": "New", "to_status": "In Progress"}]}
 
     @pytest.mark.asyncio
     @patch('database.execute_snowflake_query')
