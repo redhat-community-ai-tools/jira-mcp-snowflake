@@ -116,7 +116,7 @@ class TestRegisterTools:
             
             mock_token.return_value = 'test_token'
             mock_query.return_value = []
-            mock_enrichment.return_value = ({}, {}, {})  # labels, comments, links
+            mock_enrichment.return_value = ({}, {}, {}, {})  # labels, comments, links, status_changes
             mock_format.return_value = {}
             mock_sanitize.side_effect = lambda x: str(x).replace("'", "''")
             
@@ -172,7 +172,8 @@ class TestRegisterTools:
         mock_dependencies['enrichment'].return_value = (
             {'123': ['label1', 'label2']},  # labels
             {'123': [{'id': 'c1', 'body': 'comment'}]},  # comments  
-            {'123': [{'link_id': '456'}]}  # links
+            {'123': [{'link_id': '456'}]},  # links
+            {'TEST-1': [{'from_status': 'New', 'to_status': 'Open'}]}  # status_changes
         )
         
         register_tools(mock_mcp)
@@ -256,7 +257,8 @@ class TestRegisterTools:
         mock_dependencies['enrichment'].return_value = (
             {'123': ['label1']},  # labels
             {'123': [{'id': '789', 'body': 'Comment'}]},  # comments
-            {'123': [{'link_id': '456'}]}  # links
+            {'123': [{'link_id': '456'}]},  # links
+            {'TEST-1': [{'from_status': 'New', 'to_status': 'Open'}]}  # status_changes
         )
         
         register_tools(mock_mcp)
@@ -294,7 +296,8 @@ class TestRegisterTools:
         mock_dependencies['enrichment'].return_value = (
             {'123': ['label1'], '124': ['label2', 'label3']},  # labels
             {'123': [{'id': '789', 'body': 'Comment 1'}], '124': [{'id': '790', 'body': 'Comment 2'}]},  # comments
-            {'123': [{'link_id': '456'}], '124': [{'link_id': '457'}]}  # links
+            {'123': [{'link_id': '456'}], '124': [{'link_id': '457'}]},  # links
+            {'TEST-1': [{'from_status': 'New', 'to_status': 'Open'}], 'TEST-2': [{'from_status': 'Open', 'to_status': 'Closed'}]}  # status_changes
         )
         
         register_tools(mock_mcp)
@@ -328,7 +331,8 @@ class TestRegisterTools:
         mock_dependencies['enrichment'].return_value = (
             {'123': ['label1']},  # labels
             {'123': [{'id': '789', 'body': 'Comment'}]},  # comments
-            {'123': [{'link_id': '456'}]}  # links
+            {'123': [{'link_id': '456'}]},  # links
+            {'TEST-1': [{'from_status': 'New', 'to_status': 'Open'}]}  # status_changes
         )
         
         register_tools(mock_mcp)
@@ -388,7 +392,8 @@ class TestRegisterTools:
         mock_dependencies['enrichment'].return_value = (
             {'123': ['label1']},  # labels
             {'123': [{'id': '789', 'body': 'Comment'}]},  # comments
-            {'123': [{'link_id': '456'}]}  # links
+            {'123': [{'link_id': '456'}]},  # links
+            {'TEST-1': [{'from_status': 'New', 'to_status': 'Open'}]}  # status_changes
         )
         
         register_tools(mock_mcp)
@@ -854,7 +859,8 @@ class TestConcurrentProcessingIntegration:
         mock_concurrent_dependencies['concurrent'].return_value = (
             {"123": ["bug", "urgent"]},  # labels
             {"123": [{"id": "c1", "body": "comment"}]},  # comments
-            {"123": [{"id": "l1", "type": "blocks"}]}  # links
+            {"123": [{"id": "l1", "type": "blocks"}]},  # links
+            {"TEST-1": [{"from_status": "New", "to_status": "Open"}]}  # status_changes
         )
         
         register_tools(mock_mcp_with_concurrent)
@@ -888,7 +894,8 @@ class TestConcurrentProcessingIntegration:
         mock_concurrent_dependencies['concurrent'].return_value = (
             {"123": ["bug", "urgent"]},  # labels
             {"123": [{"id": "c1", "body": "Test comment", "created": "2024-01-01"}]},  # comments
-            {"123": [{"id": "l1", "type": "blocks"}]}  # links
+            {"123": [{"id": "l1", "type": "blocks"}]},  # links
+            {"TEST-1": [{"from_status": "New", "to_status": "Open"}]}  # status_changes
         )
         
         register_tools(mock_mcp_with_concurrent)
@@ -920,7 +927,7 @@ class TestConcurrentProcessingIntegration:
         ]
         
         # Mock concurrent processing to return empty data (simulating exception handling)
-        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {})
+        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {}, {})
         
         register_tools(mock_mcp_with_concurrent)
         list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]
@@ -947,7 +954,7 @@ class TestConcurrentProcessingIntegration:
         ]
         
         # Mock concurrent processing returns empty results
-        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {})
+        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {}, {})
         
         register_tools(mock_mcp_with_concurrent)
         list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]
@@ -966,7 +973,7 @@ class TestConcurrentProcessingIntegration:
         """Test that concurrent operations are properly tracked"""
         # Setup mocks
         mock_concurrent_dependencies['query'].return_value = []
-        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {})
+        mock_concurrent_dependencies['concurrent'].return_value = ({}, {}, {}, {})
         
         register_tools(mock_mcp_with_concurrent)
         list_jira_issues = mock_mcp_with_concurrent._registered_tools[0]

@@ -397,7 +397,7 @@ def _execute_connector_query_sync(sql: str) -> List[Dict[str, Any]]:
                     # Handle timestamp conversion
                     timestamp_columns = {
                         'CREATED', 'UPDATED', 'DUEDATE', 'RESOLUTIONDATE',
-                        'ARCHIVEDDATE', '_FIVETRAN_SYNCED'
+                        'ARCHIVEDDATE', '_FIVETRAN_SYNCED', 'CHANGE_TIMESTAMP'
                     }
                     if column_name.upper() in timestamp_columns and value:
                         if hasattr(value, 'isoformat'):
@@ -569,13 +569,14 @@ def parse_snowflake_timestamp(timestamp_str: str) -> str:
             offset_timedelta = timedelta(minutes=timezone_offset_minutes)
             dt_with_offset = dt + offset_timedelta
 
-            # Return in ISO format
-            return dt_with_offset.isoformat()
+            # Return in simplified format without decimal seconds and timezone
+            return dt_with_offset.strftime('%Y-%m-%dT%H:%M:%S')
         else:
             # Try parsing as simple timestamp
             timestamp_float = float(timestamp_str)
             dt = datetime.fromtimestamp(timestamp_float, tz=timezone.utc)
-            return dt.isoformat()
+            # Return in simplified format without decimal seconds and timezone
+            return dt.strftime('%Y-%m-%dT%H:%M:%S')
 
     except (ValueError, TypeError) as e:
         logger.debug(f"Could not parse timestamp '{timestamp_str}': {e}")
@@ -591,7 +592,7 @@ def format_snowflake_row(row_data: List[Any], columns: List[str]) -> Dict[str, A
     # Date/time columns that should be parsed
     timestamp_columns = {
         'CREATED', 'UPDATED', 'DUEDATE', 'RESOLUTIONDATE',
-        'ARCHIVEDDATE', '_FIVETRAN_SYNCED'
+        'ARCHIVEDDATE', '_FIVETRAN_SYNCED', 'CHANGE_TIMESTAMP'
     }
 
     for i in range(len(columns)):
@@ -942,25 +943,119 @@ async def get_issue_links(issue_ids: List[str], snowflake_token: Optional[str] =
     return links_data
 
 
+async def get_issue_status_changes(issue_ids: List[str], snowflake_token: Optional[str] = None, use_cache: bool = True) -> Dict[str, List[Dict[str, Any]]]:
+    """Get status change history for given issue IDs from Snowflake with caching"""
+    if not issue_ids:
+        return {}
+
+    # Check cache first
+    cache_key = get_cache_key("status_changes", issue_ids=",".join(sorted(issue_ids)))
+    if use_cache:
+        cached_result = get_from_cache(cache_key)
+        if cached_result is not None:
+            logger.debug(f"Cache hit for status changes: {len(issue_ids)} issues")
+            return cached_result
+
+    status_changes_data = {}
+
+    try:
+        # Sanitize and validate issue IDs (should be numeric)
+        sanitized_ids = []
+        for issue_id in issue_ids:
+            # Ensure issue IDs are numeric to prevent injection
+            if isinstance(issue_id, (str, int)) and str(issue_id).isdigit():
+                sanitized_ids.append(str(issue_id))
+
+        if not sanitized_ids:
+            return {}
+
+        # Create comma-separated list for IN clause
+        ids_str = "'" + "','".join(sanitized_ids) + "'"
+
+        sql = f"""
+        SELECT
+            ji.issue_key,
+            cg.created as change_timestamp,
+            old_status.pname as from_status,
+            new_status.pname as to_status,
+            CONCAT(old_status.pname, ' → ', new_status.pname) as status_transition
+        FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_CHANGEGROUP_RHAI cg
+        JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_CHANGEITEM_NON_PII ci ON cg.id = ci.groupid
+        JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII ji ON cg.issueid = ji.id
+        LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUESTATUS_RHAI old_status ON ci.oldvalue = old_status.id
+        LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUESTATUS_RHAI new_status ON ci.newvalue = new_status.id
+        WHERE ci.field = 'status'
+          AND ji.id IN ({ids_str})
+        ORDER BY ji.issue_key, cg.created ASC
+        """
+
+        if SNOWFLAKE_CONNECTION_METHOD.lower() == "connector":
+            rows = await execute_snowflake_query(sql, None, use_cache)
+            # Connector method returns dictionaries already
+            for row in rows:
+                issue_key = row.get("ISSUE_KEY")
+                if issue_key:
+                    if issue_key not in status_changes_data:
+                        status_changes_data[issue_key] = []
+                    status_change = {
+                        "issue_key": issue_key,
+                        "change_timestamp": row.get("CHANGE_TIMESTAMP"),
+                        "from_status": row.get("FROM_STATUS"),
+                        "to_status": row.get("TO_STATUS"),
+                        "status_transition": row.get("STATUS_TRANSITION")
+                    }
+                    status_changes_data[issue_key].append(status_change)
+        else:
+            rows = await execute_snowflake_query(sql, snowflake_token, use_cache)
+            columns = ["ISSUE_KEY", "CHANGE_TIMESTAMP", "FROM_STATUS", "TO_STATUS", "STATUS_TRANSITION"]
+            for row in rows:
+                row_dict = format_snowflake_row(row, columns)
+                issue_key = row_dict.get("ISSUE_KEY")
+
+                if issue_key:
+                    if issue_key not in status_changes_data:
+                        status_changes_data[issue_key] = []
+
+                    status_change = {
+                        "issue_key": issue_key,
+                        "change_timestamp": row_dict.get("CHANGE_TIMESTAMP"),
+                        "from_status": row_dict.get("FROM_STATUS"),
+                        "to_status": row_dict.get("TO_STATUS"),
+                        "status_transition": row_dict.get("STATUS_TRANSITION")
+                    }
+                    status_changes_data[issue_key].append(status_change)
+
+        # Cache the result
+        if use_cache:
+            set_in_cache(cache_key, status_changes_data)
+            logger.debug(f"Cached status changes for {len(issue_ids)} issues")
+
+    except Exception as e:
+        logger.error(f"Error fetching status changes: {str(e)}")
+
+    return status_changes_data
+
+
 async def get_issue_enrichment_data_concurrent(
     issue_ids: List[str],
     snowflake_token: Optional[str] = None,
     use_cache: bool = True
-) -> Tuple[Dict[str, List[str]], Dict[str, List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]]:
-    """Get labels, comments, and links for issues concurrently for better performance"""
+) -> Tuple[Dict[str, List[str]], Dict[str, List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]]:
+    """Get labels, comments, links, and status changes for issues concurrently for better performance"""
     if not issue_ids:
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
     logger.info(f"Fetching enrichment data for {len(issue_ids)} issues concurrently")
 
-    # Use asyncio.gather to run all three operations concurrently
+    # Use asyncio.gather to run all four operations concurrently
     try:
         labels_task = get_issue_labels(issue_ids, snowflake_token, use_cache)
         comments_task = get_issue_comments(issue_ids, snowflake_token, use_cache)
         links_task = get_issue_links(issue_ids, snowflake_token, use_cache)
+        status_changes_task = get_issue_status_changes(issue_ids, snowflake_token, use_cache)
 
-        labels_data, comments_data, links_data = await asyncio.gather(
-            labels_task, comments_task, links_task, return_exceptions=True
+        labels_data, comments_data, links_data, status_changes_data = await asyncio.gather(
+            labels_task, comments_task, links_task, status_changes_task, return_exceptions=True
         )
 
         # Handle exceptions
@@ -973,13 +1068,16 @@ async def get_issue_enrichment_data_concurrent(
         if isinstance(links_data, Exception):
             logger.error(f"Error fetching links: {links_data}")
             links_data = {}
+        if isinstance(status_changes_data, Exception):
+            logger.error(f"Error fetching status changes: {status_changes_data}")
+            status_changes_data = {}
 
         logger.info(f"Successfully fetched enrichment data for {len(issue_ids)} issues")
-        return labels_data, comments_data, links_data
+        return labels_data, comments_data, links_data, status_changes_data
 
     except Exception as e:
         logger.error(f"Error in concurrent enrichment data fetch: {e}")
-        return {}, {}, {}
+        return {}, {}, {}, {}
 
 
 async def execute_queries_in_batches(

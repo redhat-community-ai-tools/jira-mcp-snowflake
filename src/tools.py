@@ -244,18 +244,18 @@ def register_tools(mcp: FastMCP) -> None:
 
             # Get labels, comments, and links concurrently for better performance
             track_concurrent_operation("issue_enrichment")
-            labels_data, comments_data, links_data = await get_issue_enrichment_data_concurrent(
+            labels_data, comments_data, links_data, status_changes_data = await get_issue_enrichment_data_concurrent(
                 issue_ids, snowflake_token
             )
 
-            # Enrich issues with labels and links
+            # Enrich issues with labels and links (no status changes in list view)
             issues = list(issues_by_id.values())
             for issue in issues:
                 issue_id = str(issue['id'])
                 issue['labels'] = labels_data.get(issue_id, [])
                 issue['links'] = links_data.get(issue_id, [])
-                # Don't add comments to list view to keep it lightweight
-                # Comments are only added in the detailed view
+                # Don't add comments or status changes to list view to keep it lightweight
+                # Comments and status changes are only added in the detailed view
 
             return {
                 "issues": issues,
@@ -394,19 +394,20 @@ def register_tools(mcp: FastMCP) -> None:
             # Determine which keys were not found
             not_found_keys = [key for key in issue_keys if key not in found_keys]
 
-            # Get labels, comments, and links concurrently for all found issues
+            # Get labels, comments, links, and status changes concurrently for all found issues
             if issue_ids:
                 track_concurrent_operation("multiple_issue_enrichment")
-                labels_data, comments_data, links_data = await get_issue_enrichment_data_concurrent(
+                labels_data, comments_data, links_data, status_changes_data = await get_issue_enrichment_data_concurrent(
                     issue_ids, snowflake_token
                 )
 
-                # Enrich each issue with labels, comments, and links
+                # Enrich each issue with labels, comments, links, and status changes
                 for issue_key, issue in found_issues.items():
                     issue_id = str(issue['id'])
                     issue['labels'] = labels_data.get(issue_id, [])
                     issue['comments'] = comments_data.get(issue_id, [])
                     issue['links'] = links_data.get(issue_id, [])
+                    issue['status_changes'] = status_changes_data.get(issue_key, [])
 
             return {
                 "found_issues": found_issues,
