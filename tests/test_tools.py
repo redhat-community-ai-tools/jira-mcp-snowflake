@@ -634,6 +634,118 @@ class TestRegisterTools:
         assert result['filters_applied']['timeframe'] == 0
 
     @pytest.mark.asyncio
+    async def test_list_jira_issues_with_issue_keys(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with issue_keys parameter"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with single issue key
+        result = await list_jira_issues(issue_keys=['TEST-123'])
+        
+        # Verify SQL conditions include issue key filter
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.ISSUE_KEY IN ('TEST-123')" in sql_call
+        
+        # Verify filters_applied includes issue_keys
+        assert result['filters_applied']['issue_keys'] == ['TEST-123']
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_multiple_issue_keys(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with multiple issue keys"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with multiple issue keys
+        issue_keys = ['TEST-123', 'PROJ-456', 'BUG-789']
+        result = await list_jira_issues(issue_keys=issue_keys)
+        
+        # Verify SQL conditions include all issue keys
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.ISSUE_KEY IN ('TEST-123', 'PROJ-456', 'BUG-789')" in sql_call
+        
+        # Verify filters_applied includes all issue_keys
+        assert result['filters_applied']['issue_keys'] == issue_keys
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_issue_keys_and_other_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with issue_keys combined with other filters"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with issue_keys and other filters
+        result = await list_jira_issues(
+            issue_keys=['TEST-123', 'TEST-456'],
+            project='TEST',
+            status='Open',
+            priority='High'
+        )
+        
+        # Verify SQL conditions include all filters
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.ISSUE_KEY IN ('TEST-123', 'TEST-456')" in sql_call
+        assert "i.PROJECT = 'TEST'" in sql_call
+        assert "i.ISSUESTATUS = 'Open'" in sql_call
+        assert "i.PRIORITY = 'High'" in sql_call
+        
+        # Verify filters_applied includes all parameters
+        assert result['filters_applied']['issue_keys'] == ['TEST-123', 'TEST-456']
+        assert result['filters_applied']['project'] == 'TEST'
+        assert result['filters_applied']['status'] == 'Open'
+        assert result['filters_applied']['priority'] == 'High'
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_empty_issue_keys(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with empty issue_keys list"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with empty issue_keys list (should be ignored)
+        result = await list_jira_issues(issue_keys=[], project='TEST')
+        
+        # Verify SQL conditions do NOT include issue key filter
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.ISSUE_KEY IN" not in sql_call
+        assert "i.PROJECT = 'TEST'" in sql_call
+        
+        # Verify filters_applied includes empty issue_keys
+        assert result['filters_applied']['issue_keys'] == []
+        assert result['filters_applied']['project'] == 'TEST'
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_issue_keys_sql_sanitization(self, mock_mcp, mock_dependencies):
+        """Test that issue_keys are properly sanitized for SQL injection protection"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with issue keys that contain SQL-sensitive characters
+        issue_keys = ["TEST-123", "PROJ'456", "BUG\"789"]
+        result = await list_jira_issues(issue_keys=issue_keys)
+        
+        # Verify sanitize_sql_value was called for each issue key
+        mock_dependencies['sanitize'].assert_any_call("TEST-123")
+        mock_dependencies['sanitize'].assert_any_call("PROJ'456")
+        mock_dependencies['sanitize'].assert_any_call("BUG\"789")
+        
+        # Verify SQL contains sanitized values
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "i.ISSUE_KEY IN" in sql_call
+
+    @pytest.mark.asyncio
     async def test_list_jira_issues_large_timeframe(self, mock_mcp, mock_dependencies):
         """Test list_jira_issues with large timeframe (365 days)"""
         mock_dependencies['query'].return_value = []
