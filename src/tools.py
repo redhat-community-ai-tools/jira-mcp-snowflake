@@ -47,6 +47,7 @@ def register_tools(mcp: FastMCP) -> None:
     @track_tool_usage("list_jira_issues")
     async def list_jira_issues(
         project: Optional[str] = None,
+        issue_keys: Optional[List[str]] = None,
         issue_type: Optional[str] = None,
         status: Optional[str] = None,
         priority: Optional[str] = None,
@@ -62,6 +63,7 @@ def register_tools(mcp: FastMCP) -> None:
 
         Args:
             project: Filter by project key (e.g., 'SMQE', 'OSIM')
+            issue_keys: List of JIRA issue keys (e.g., ['SMQE-1280', 'SMQE-1281'])
             issue_type: Filter by issue type ID
             status: Filter by issue status ID
             priority: Filter by priority ID
@@ -84,6 +86,9 @@ def register_tools(mcp: FastMCP) -> None:
 
             # Build SQL query with filters - always include component joins
             sql_conditions = []
+
+            if issue_keys:
+                sql_conditions.append(f"i.ISSUE_KEY IN ({', '.join([f"'{sanitize_sql_value(key)}'" for key in issue_keys])})")
 
             if project:
                 sql_conditions.append(f"i.PROJECT = '{sanitize_sql_value(project.upper())}'")
@@ -262,6 +267,7 @@ def register_tools(mcp: FastMCP) -> None:
                 "total_returned": len(issues),
                 "filters_applied": {
                     "project": project,
+                    "issue_keys": issue_keys,
                     "issue_type": issue_type,
                     "status": status,
                     "priority": priority,
