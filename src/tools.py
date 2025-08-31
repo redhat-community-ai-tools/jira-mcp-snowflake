@@ -148,7 +148,7 @@ def register_tools(mcp: FastMCP) -> None:
             if sql_conditions:
                 where_clause = "WHERE " + " AND ".join(sql_conditions)
 
-            # Build the SQL query - always include component joins
+            # Build the SQL query - always include component joins and version joins
             sql = f"""
             SELECT DISTINCT
                 i.ID, i.ISSUE_KEY, i.PROJECT, i.ISSUENUM, i.ISSUETYPE, i.SUMMARY,
@@ -156,7 +156,9 @@ def register_tools(mcp: FastMCP) -> None:
                 i.DESCRIPTION, i.PRIORITY, i.ISSUESTATUS, i.RESOLUTION,
                 i.CREATED, i.UPDATED, i.DUEDATE, i.RESOLUTIONDATE,
                 i.VOTES, i.WATCHES, i.ENVIRONMENT, i.COMPONENT, i.FIXFOR,
-                compagg.COMPONENT_NAMES
+                compagg.COMPONENT_NAMES,
+                veragg.FIX_VERSIONS,
+                veragg.AFFECTS_VERSIONS
             FROM JIRA_ISSUE_NON_PII i
             LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
                 ON i.ID = na.SOURCE_NODE_ID
@@ -173,6 +175,19 @@ def register_tools(mcp: FastMCP) -> None:
                 WHERE na2.ASSOCIATION_TYPE = 'IssueComponent'
                 GROUP BY na2.SOURCE_NODE_ID
             ) compagg ON compagg.ISSUE_ID = i.ID
+            LEFT JOIN (
+                SELECT
+                    na3.SOURCE_NODE_ID AS ISSUE_ID,
+                    LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS FIX_VERSIONS,
+                    LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS AFFECTS_VERSIONS
+                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na3
+                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_PROJECTVERSION_NON_PII pv
+                    ON na3.SINK_NODE_ID = pv.ID
+                WHERE na3.ASSOCIATION_TYPE IN ('IssueFixVersion', 'IssueVersion')
+                    AND na3.SINK_NODE_ENTITY = 'Version'
+                    AND na3.SOURCE_NODE_ENTITY = 'Issue'
+                GROUP BY na3.SOURCE_NODE_ID
+            ) veragg ON veragg.ISSUE_ID = i.ID
             {where_clause}
             ORDER BY i.CREATED DESC
             LIMIT {limit}
@@ -190,7 +205,7 @@ def register_tools(mcp: FastMCP) -> None:
                 "DESCRIPTION_TRUNCATED", "DESCRIPTION", "PRIORITY", "ISSUESTATUS",
                 "RESOLUTION", "CREATED", "UPDATED", "DUEDATE", "RESOLUTIONDATE",
                 "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR",
-                "COMPONENT_NAMES"
+                "COMPONENT_NAMES", "FIX_VERSIONS", "AFFECTS_VERSIONS"
             ]
 
             for row in rows:
@@ -231,6 +246,9 @@ def register_tools(mcp: FastMCP) -> None:
                         # Expose full list of component names for the issue
                         "component": [],
                         "fix_version": row_dict.get("FIXFOR"),
+                        # New version fields from joins
+                        "fixed_version": row_dict.get("FIX_VERSIONS") or "",
+                        "affected_version": row_dict.get("AFFECTS_VERSIONS") or "",
                         # For backwards-compatibility, keep a single representative component_name if desired
                         "component_name": None,
                     }
@@ -323,13 +341,28 @@ def register_tools(mcp: FastMCP) -> None:
                 i.TIMEORIGINALESTIMATE, i.TIMEESTIMATE, i.TIMESPENT, i.WORKFLOW_ID,
                 i.SECURITY, i.ARCHIVED, i.ARCHIVEDDATE,
                 c.CNAME as COMPONENT_NAME, c.DESCRIPTION as COMPONENT_DESCRIPTION,
-                c.ARCHIVED as COMPONENT_ARCHIVED, c.DELETED as COMPONENT_DELETED
+                c.ARCHIVED as COMPONENT_ARCHIVED, c.DELETED as COMPONENT_DELETED,
+                veragg.FIX_VERSIONS,
+                veragg.AFFECTS_VERSIONS
             FROM JIRA_ISSUE_NON_PII i
             LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
                 ON i.ID = na.SOURCE_NODE_ID
                 AND na.ASSOCIATION_TYPE = 'IssueComponent'
             LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
                 ON na.SINK_NODE_ID = c.ID
+            LEFT JOIN (
+                SELECT
+                    na3.SOURCE_NODE_ID AS ISSUE_ID,
+                    LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS FIX_VERSIONS,
+                    LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS AFFECTS_VERSIONS
+                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na3
+                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_PROJECTVERSION_NON_PII pv
+                    ON na3.SINK_NODE_ID = pv.ID
+                WHERE na3.ASSOCIATION_TYPE IN ('IssueFixVersion', 'IssueVersion')
+                    AND na3.SINK_NODE_ENTITY = 'Version'
+                    AND na3.SOURCE_NODE_ENTITY = 'Issue'
+                GROUP BY na3.SOURCE_NODE_ID
+            ) veragg ON veragg.ISSUE_ID = i.ID
             WHERE i.ISSUE_KEY IN {in_clause}
             ORDER BY i.ISSUE_KEY
             """
@@ -343,7 +376,8 @@ def register_tools(mcp: FastMCP) -> None:
                 "RESOLUTIONDATE", "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR",
                 "TIMEORIGINALESTIMATE", "TIMEESTIMATE", "TIMESPENT", "WORKFLOW_ID",
                 "SECURITY", "ARCHIVED", "ARCHIVEDDATE",
-                "COMPONENT_NAME", "COMPONENT_DESCRIPTION", "COMPONENT_ARCHIVED", "COMPONENT_DELETED"
+                "COMPONENT_NAME", "COMPONENT_DESCRIPTION", "COMPONENT_ARCHIVED", "COMPONENT_DELETED",
+                "FIX_VERSIONS", "AFFECTS_VERSIONS"
             ]
 
             # Process all rows and track found issue keys
@@ -383,6 +417,9 @@ def register_tools(mcp: FastMCP) -> None:
                         "environment": row_dict.get("ENVIRONMENT"),
                         "component": row_dict.get("COMPONENT"),
                         "fix_version": row_dict.get("FIXFOR"),
+                        # New version fields from joins
+                        "fixed_version": row_dict.get("FIX_VERSIONS") or "",
+                        "affected_version": row_dict.get("AFFECTS_VERSIONS") or "",
                         "time_original_estimate": row_dict.get("TIMEORIGINALESTIMATE"),
                         "time_estimate": row_dict.get("TIMEESTIMATE"),
                         "time_spent": row_dict.get("TIMESPENT"),
