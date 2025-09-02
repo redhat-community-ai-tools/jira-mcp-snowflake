@@ -3,11 +3,21 @@ FROM quay.io/sclorg/python-312-minimal-c9s:latest
 LABEL konflux.additional-tags="latest"
 # Set default MCP transport if not provided
 ENV MCP_TRANSPORT=stdio
+ENV PYTHONPATH=/app
 
-COPY . . 
-# Install dependencies
+WORKDIR /app
 
-RUN pip install --no-cache-dir .
+# Install UV package manager
+RUN pip install uv
+
+# Copy project files and install dependencies
+COPY pyproject.toml /app/pyproject.toml
+COPY README.md /app/README.md
+COPY src/ /app/
+
+# Create virtual environment and install dependencies
+RUN uv venv ~/.venv
+RUN uv pip install --python ~/.venv/bin/python -e .
 
 # Environment variables (set these when running the container)
 # Required:
@@ -36,4 +46,5 @@ RUN pip install --no-cache-dir .
 # Expose metrics port
 EXPOSE 8000
 
-CMD ["python", "src/mcp_server.py"]
+# Set entrypoint to run the application using UV virtual environment
+CMD ["/opt/app-root/src/.venv/bin/python", "mcp_server.py"]
