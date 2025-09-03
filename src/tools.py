@@ -58,6 +58,8 @@ def register_tools(mcp: FastMCP) -> None:
         created_days: int = 0,
         updated_days: int = 0,
         resolved_days: int = 0,
+        fixed_version: Optional[str] = None,
+        affected_version: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
 
@@ -74,6 +76,8 @@ def register_tools(mcp: FastMCP) -> None:
             created_days: Filter by creation date within last N days (overrides timeframe if > 0, default: 0 = disabled)
             updated_days: Filter by update date within last N days (default: 0 = disabled)
             resolved_days: Filter by resolution date within last N days (default: 0 = disabled)
+            fixed_version: Filter by fixed/target version name
+            affected_version: Filter by affected version name
 
         Returns:
             Dictionary containing issues list and metadata
@@ -120,6 +124,12 @@ def register_tools(mcp: FastMCP) -> None:
                         )
                     components_condition = "(" + " OR ".join(per_term_conditions) + ")"
                     sql_conditions.append(components_condition)
+
+            if fixed_version:
+                sql_conditions.append(f"LOWER(veragg.FIX_VERSIONS) LIKE '%{sanitize_sql_value(fixed_version.lower())}%'")
+
+            if affected_version:
+                sql_conditions.append(f"LOWER(veragg.AFFECTS_VERSIONS) LIKE '%{sanitize_sql_value(affected_version.lower())}%'")
 
             # Add date filters - specific date filters take precedence over general timeframe
             date_conditions = []
@@ -295,6 +305,8 @@ def register_tools(mcp: FastMCP) -> None:
                     "created_days": created_days,
                     "updated_days": updated_days,
                     "resolved_days": resolved_days,
+                    "fixed_version": fixed_version,
+                    "affected_version": affected_version,
                     "limit": limit
                 }
             }

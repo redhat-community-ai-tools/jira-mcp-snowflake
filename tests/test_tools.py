@@ -701,6 +701,8 @@ class TestRegisterTools:
         assert result['filters_applied']['project'] == 'TEST'
         assert result['filters_applied']['status'] == 'Open'
         assert result['filters_applied']['priority'] == 'High'
+        assert result['filters_applied']['fixed_version'] is None
+        assert result['filters_applied']['affected_version'] is None
 
     @pytest.mark.asyncio
     async def test_list_jira_issues_with_empty_issue_keys(self, mock_mcp, mock_dependencies):
@@ -909,6 +911,55 @@ class TestRegisterTools:
         assert result['filters_applied']['created_days'] == 0
         assert result['filters_applied']['updated_days'] == 0
         assert result['filters_applied']['resolved_days'] == 0
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_version_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with fixed_version and affected_version filters"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with version filters
+        result = await list_jira_issues(
+            project='TEST',
+            fixed_version='v1.2.3',
+            affected_version='v1.1.0'
+        )
+        
+        # Verify SQL conditions include version filters
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "LOWER(veragg.FIX_VERSIONS) LIKE '%v1.2.3%'" in sql_call
+        assert "LOWER(veragg.AFFECTS_VERSIONS) LIKE '%v1.1.0%'" in sql_call
+        
+        # Verify filters_applied includes version filters
+        assert result['filters_applied']['fixed_version'] == 'v1.2.3'
+        assert result['filters_applied']['affected_version'] == 'v1.1.0'
+
+    @pytest.mark.asyncio
+    async def test_list_jira_issues_with_partial_version_filters(self, mock_mcp, mock_dependencies):
+        """Test list_jira_issues with only one version filter specified"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        list_jira_issues = mock_mcp._registered_tools[0]
+        
+        # Test with only fixed_version filter
+        result = await list_jira_issues(
+            project='TEST',
+            fixed_version='v2.0'
+        )
+        
+        # Verify SQL conditions include only fixed_version filter
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "LOWER(veragg.FIX_VERSIONS) LIKE '%v2.0%'" in sql_call
+        assert "LOWER(veragg.AFFECTS_VERSIONS) LIKE" not in sql_call
+        
+        # Verify filters_applied includes only specified filter
+        assert result['filters_applied']['fixed_version'] == 'v2.0'
+        assert result['filters_applied']['affected_version'] is None
 
 
 class TestConcurrentProcessingIntegration:
