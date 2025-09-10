@@ -451,7 +451,7 @@ class TestRegisterTools:
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
         assert "LOWER(c.CNAME) LIKE '%frontend%'" in sql_call
-        assert "JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c" in sql_call
+        assert "JOIN None.None.JIRA_COMPONENT_RHAI c" in sql_call
         
         # Verify filters_applied includes component filters
         assert result['filters_applied']['components'] == 'frontend'
@@ -469,8 +469,8 @@ class TestRegisterTools:
         # Verify SQL ALWAYS includes component joins now
         mock_dependencies['query'].assert_called_once()
         sql_call = mock_dependencies['query'].call_args[0][0]
-        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c" in sql_call
-        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na" in sql_call
+        assert "LEFT JOIN None.None.JIRA_COMPONENT_RHAI c" in sql_call
+        assert "LEFT JOIN None.None.JIRA_NODEASSOCIATION_RHAI na" in sql_call
         assert "i.PROJECT = 'TEST'" in sql_call  # Should always have table alias now
 
     @pytest.mark.asyncio
@@ -1304,8 +1304,8 @@ class TestGetJiraIssuesBySprint:
         assert "CAST(cfv.stringvalue AS INTEGER) = s.id" in sql_call
         
         # Check for component and version joins
-        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na" in sql_call
-        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c" in sql_call
+        assert "LEFT JOIN None.None.JIRA_NODEASSOCIATION_RHAI na" in sql_call
+        assert "LEFT JOIN None.None.JIRA_COMPONENT_RHAI c" in sql_call
         assert "LISTAGG(DISTINCT c2.CNAME, '||')" in sql_call
         assert "LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion'" in sql_call
         

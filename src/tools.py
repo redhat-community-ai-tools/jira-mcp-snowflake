@@ -169,18 +169,18 @@ def register_tools(mcp: FastMCP) -> None:
                 compagg.COMPONENT_NAMES,
                 veragg.FIX_VERSIONS,
                 veragg.AFFECTS_VERSIONS
-            FROM JIRA_ISSUE_NON_PII i
-            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+            FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII i
+            LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na
                 ON i.ID = na.SOURCE_NODE_ID
                 AND na.ASSOCIATION_TYPE = 'IssueComponent'
-            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+            LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_COMPONENT_RHAI c
                 ON na.SINK_NODE_ID = c.ID
             LEFT JOIN (
                 SELECT
                     na2.SOURCE_NODE_ID AS ISSUE_ID,
                     LISTAGG(DISTINCT c2.CNAME, '||') WITHIN GROUP (ORDER BY c2.CNAME) AS COMPONENT_NAMES
-                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na2
-                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c2
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na2
+                LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_COMPONENT_RHAI c2
                     ON na2.SINK_NODE_ID = c2.ID
                 WHERE na2.ASSOCIATION_TYPE = 'IssueComponent'
                 GROUP BY na2.SOURCE_NODE_ID
@@ -190,8 +190,8 @@ def register_tools(mcp: FastMCP) -> None:
                     na3.SOURCE_NODE_ID AS ISSUE_ID,
                     LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS FIX_VERSIONS,
                     LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS AFFECTS_VERSIONS
-                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na3
-                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_PROJECTVERSION_NON_PII pv
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na3
+                LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_PROJECTVERSION_NON_PII pv
                     ON na3.SINK_NODE_ID = pv.ID
                 WHERE na3.ASSOCIATION_TYPE IN ('IssueFixVersion', 'IssueVersion')
                     AND na3.SINK_NODE_ENTITY = 'Version'
@@ -356,19 +356,19 @@ def register_tools(mcp: FastMCP) -> None:
                 c.ARCHIVED as COMPONENT_ARCHIVED, c.DELETED as COMPONENT_DELETED,
                 veragg.FIX_VERSIONS,
                 veragg.AFFECTS_VERSIONS
-            FROM JIRA_ISSUE_NON_PII i
-            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+            FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII i
+            LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na
                 ON i.ID = na.SOURCE_NODE_ID
                 AND na.ASSOCIATION_TYPE = 'IssueComponent'
-            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+            LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_COMPONENT_RHAI c
                 ON na.SINK_NODE_ID = c.ID
             LEFT JOIN (
                 SELECT
                     na3.SOURCE_NODE_ID AS ISSUE_ID,
                     LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS FIX_VERSIONS,
                     LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS AFFECTS_VERSIONS
-                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na3
-                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_PROJECTVERSION_NON_PII pv
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na3
+                LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_PROJECTVERSION_NON_PII pv
                     ON na3.SINK_NODE_ID = pv.ID
                 WHERE na3.ASSOCIATION_TYPE IN ('IssueFixVersion', 'IssueVersion')
                     AND na3.SINK_NODE_ENTITY = 'Version'
@@ -495,7 +495,7 @@ def register_tools(mcp: FastMCP) -> None:
                 ISSUESTATUS,
                 PRIORITY,
                 COUNT(*) as COUNT
-            FROM JIRA_ISSUE_NON_PII
+            FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII
             GROUP BY PROJECT, ISSUESTATUS, PRIORITY
             ORDER BY PROJECT, ISSUESTATUS, PRIORITY
             """
@@ -562,7 +562,7 @@ def register_tools(mcp: FastMCP) -> None:
             # First get the issue ID from the issue key
             sql = f"""
             SELECT ID
-            FROM JIRA_ISSUE_NON_PII
+            FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII
             WHERE ISSUE_KEY = '{sanitize_sql_value(issue_key)}'
             LIMIT 1
             """
@@ -654,17 +654,17 @@ def register_tools(mcp: FastMCP) -> None:
                 AND cfv.customfield_name = 'Sprint'
             JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_SPRINT_RHAI s
                 ON CAST(cfv.stringvalue AS INTEGER) = s.id
-            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+            LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na
                 ON i.ID = na.SOURCE_NODE_ID
                 AND na.ASSOCIATION_TYPE = 'IssueComponent'
-            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+            LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_COMPONENT_RHAI c
                 ON na.SINK_NODE_ID = c.ID
             LEFT JOIN (
                 SELECT
                     na2.SOURCE_NODE_ID AS ISSUE_ID,
                     LISTAGG(DISTINCT c2.CNAME, '||') WITHIN GROUP (ORDER BY c2.CNAME) AS COMPONENT_NAMES
-                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na2
-                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c2
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na2
+                LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_COMPONENT_RHAI c2
                     ON na2.SINK_NODE_ID = c2.ID
                 WHERE na2.ASSOCIATION_TYPE = 'IssueComponent'
                 GROUP BY na2.SOURCE_NODE_ID
@@ -674,8 +674,8 @@ def register_tools(mcp: FastMCP) -> None:
                     na3.SOURCE_NODE_ID AS ISSUE_ID,
                     LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS FIX_VERSIONS,
                     LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS AFFECTS_VERSIONS
-                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na3
-                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_PROJECTVERSION_NON_PII pv
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_NODEASSOCIATION_RHAI na3
+                LEFT JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_PROJECTVERSION_NON_PII pv
                     ON na3.SINK_NODE_ID = pv.ID
                 WHERE na3.ASSOCIATION_TYPE IN ('IssueFixVersion', 'IssueVersion')
                     AND na3.SINK_NODE_ENTITY = 'Version'
