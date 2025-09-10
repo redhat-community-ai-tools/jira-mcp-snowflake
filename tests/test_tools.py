@@ -131,8 +131,8 @@ class TestRegisterTools:
     def test_register_tools(self, mock_mcp):
         """Test that register_tools completes without error"""
         register_tools(mock_mcp)
-        # Verify that 4 tools were registered (removed list_jira_components)
-        assert len(mock_mcp._registered_tools) == 4
+        # Verify that 5 tools were registered (added get_jira_issues_by_sprint)
+        assert len(mock_mcp._registered_tools) == 5
 
     @pytest.mark.asyncio
     async def test_list_jira_issues_no_token(self, mock_mcp, mock_dependencies):
@@ -1160,3 +1160,327 @@ class TestConcurrentProcessingIntegration:
             call("multiple_issue_enrichment")
         ]
         mock_concurrent_dependencies['track'].assert_has_calls(expected_calls)
+
+
+class TestGetJiraIssuesBySprint:
+    """Test cases for get_jira_issues_by_sprint function"""
+
+    @pytest.fixture
+    def mock_mcp(self):
+        """Create a mock MCP instance"""
+        mcp = MagicMock()
+        mcp._registered_tools = []
+        
+        def mock_tool_decorator():
+            def decorator(func):
+                mcp._registered_tools.append(func)
+                return func
+            return decorator
+        
+        mcp.tool = mock_tool_decorator
+        return mcp
+
+    @pytest.fixture
+    def mock_dependencies(self):
+        """Mock all external dependencies"""
+        with patch('tools.get_snowflake_token') as mock_token, \
+             patch('tools.execute_snowflake_query') as mock_query, \
+             patch('tools.get_issue_enrichment_data_concurrent') as mock_enrichment, \
+             patch('tools.format_snowflake_row') as mock_format, \
+             patch('tools.sanitize_sql_value') as mock_sanitize, \
+             patch('tools.track_concurrent_operation') as mock_track:
+            
+            mock_token.return_value = 'test_token'
+            mock_query.return_value = []
+            mock_enrichment.return_value = ({}, {}, {}, {})  # labels, comments, links, status_changes
+            mock_format.return_value = {}
+            mock_sanitize.side_effect = lambda x: str(x).replace("'", "''")
+            
+            yield {
+                'token': mock_token,
+                'query': mock_query,
+                'enrichment': mock_enrichment,
+                'format': mock_format,
+                'sanitize': mock_sanitize,
+                'track': mock_track
+            }
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_no_token(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issues_by_sprint when no token is available"""
+        mock_dependencies['token'].return_value = None
+        
+        register_tools(mock_mcp)
+        
+        # Get the registered function (should be index 4 for the sprint tool)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        assert result['error'] == "Snowflake token not available"
+        assert result['issues'] == []
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_success(self, mock_mcp, mock_dependencies):
+        """Test successful get_jira_issues_by_sprint execution"""
+        # Mock successful query result
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Short desc', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None,
+             '256', 'Sprint 256', 'Test Component', 'v1.0', 'v0.9']
+        ]
+        
+        mock_dependencies['format'].return_value = {
+            'ID': '123', 'ISSUE_KEY': 'TEST-1', 'PROJECT': 'TEST', 'ISSUENUM': '1',
+            'ISSUETYPE': 'Bug', 'SUMMARY': 'Test Summary', 'DESCRIPTION_TRUNCATED': 'Short desc',
+            'DESCRIPTION': 'Full description', 'PRIORITY': 'High', 'ISSUESTATUS': 'Open',
+            'RESOLUTION': None, 'CREATED': '2024-01-01', 'UPDATED': '2024-01-02',
+            'DUEDATE': None, 'RESOLUTIONDATE': None, 'VOTES': '0', 'WATCHES': '1',
+            'ENVIRONMENT': None, 'COMPONENT': None, 'FIXFOR': None,
+            'SPRINT_ID': '256', 'SPRINT_NAME': 'Sprint 256',
+            'COMPONENT_NAMES': 'Test Component', 'FIX_VERSIONS': 'v1.0', 'AFFECTS_VERSIONS': 'v0.9'
+        }
+        
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['label1', 'label2']},  # labels
+            {'123': [{'id': 'c1', 'body': 'comment'}]},  # comments  
+            {'123': [{'link_id': '456'}]},  # links
+            {'TEST-1': [{'from_status': 'New', 'to_status': 'Open'}]}  # status_changes
+        )
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256', limit=10)
+        
+        assert 'issues' in result
+        assert 'total_returned' in result
+        assert 'sprint_name' in result
+        assert 'filters_applied' in result
+        assert result['sprint_name'] == 'Sprint 256'
+        assert result['filters_applied']['sprint_name'] == 'Sprint 256'
+        assert result['filters_applied']['limit'] == 10
+        assert result['filters_applied']['project'] is None
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_with_project_filter(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issues_by_sprint with project filter"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256', project='TEST', limit=25)
+        
+        # Verify SQL conditions were built correctly
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "s.name = 'Sprint 256'" in sql_call
+        assert "i.PROJECT = 'TEST'" in sql_call
+        assert "LIMIT 25" in sql_call
+        
+        # Verify filters_applied includes project filter
+        assert result['filters_applied']['sprint_name'] == 'Sprint 256'
+        assert result['filters_applied']['project'] == 'TEST'
+        assert result['filters_applied']['limit'] == 25
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_sql_structure(self, mock_mcp, mock_dependencies):
+        """Test that the SQL query includes all required joins and fields"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Vanguard Sprint 6')
+        
+        # Verify SQL structure matches the provided example
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        
+        # Check for essential joins (allowing for configuration-based database/schema)
+        assert "JIRA_CUSTOMFIELDVALUE_NON_PII cfv" in sql_call
+        assert "cfv.customfield_name = 'Sprint'" in sql_call
+        assert "JIRA_SPRINT_RHAI s" in sql_call
+        assert "CAST(cfv.stringvalue AS INTEGER) = s.id" in sql_call
+        
+        # Check for component and version joins
+        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na" in sql_call
+        assert "LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c" in sql_call
+        assert "LISTAGG(DISTINCT c2.CNAME, '||')" in sql_call
+        assert "LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion'" in sql_call
+        
+        # Check for sprint fields
+        assert "cfv.stringvalue as SPRINT_ID" in sql_call
+        assert "s.name as SPRINT_NAME" in sql_call
+        
+        # Check WHERE clause
+        assert "WHERE s.name = 'Vanguard Sprint 6'" in sql_call
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_sql_sanitization(self, mock_mcp, mock_dependencies):
+        """Test that sprint name and project are properly sanitized"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        # Test with sprint name that contains SQL-sensitive characters
+        sprint_name = "Sprint 'Test' 256"
+        project = "PROJ'ECT"
+        
+        result = await get_jira_issues_by_sprint(sprint_name, project=project)
+        
+        # Verify sanitize_sql_value was called for sprint name and project
+        mock_dependencies['sanitize'].assert_any_call(sprint_name)
+        mock_dependencies['sanitize'].assert_any_call(project.upper())
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_enrichment_tracking(self, mock_mcp, mock_dependencies):
+        """Test that concurrent enrichment is properly tracked"""
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Short desc', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None,
+             '256', 'Sprint 256', 'Test Component', 'v1.0', 'v0.9']
+        ]
+        
+        mock_dependencies['format'].return_value = {
+            'ID': '123', 'ISSUE_KEY': 'TEST-1', 'SPRINT_ID': '256', 'SPRINT_NAME': 'Sprint 256'
+        }
+        
+        mock_dependencies['enrichment'].return_value = (
+            {'123': ['urgent']},  # labels
+            {'123': []},  # comments  
+            {'123': []},  # links
+            {}  # status_changes
+        )
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        
+        # Verify concurrent operation tracking
+        mock_dependencies['track'].assert_called_with("sprint_issue_enrichment")
+        
+        # Verify enrichment was called
+        mock_dependencies['enrichment'].assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_component_aggregation(self, mock_mcp, mock_dependencies):
+        """Test component aggregation works correctly"""
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Short desc', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None,
+             '256', 'Sprint 256', 'frontend||backend', 'v1.0', 'v0.9']
+        ]
+        
+        mock_dependencies['format'].return_value = {
+            'ID': '123', 'ISSUE_KEY': 'TEST-1', 'PROJECT': 'TEST', 'ISSUENUM': '1',
+            'ISSUETYPE': 'Bug', 'SUMMARY': 'Test Summary', 'DESCRIPTION_TRUNCATED': 'Short desc',
+            'DESCRIPTION': 'Full description', 'PRIORITY': 'High', 'ISSUESTATUS': 'Open',
+            'RESOLUTION': None, 'CREATED': '2024-01-01', 'UPDATED': '2024-01-02',
+            'DUEDATE': None, 'RESOLUTIONDATE': None, 'VOTES': '0', 'WATCHES': '1',
+            'ENVIRONMENT': None, 'COMPONENT': None, 'FIXFOR': None,
+            'SPRINT_ID': '256', 'SPRINT_NAME': 'Sprint 256',
+            'COMPONENT_NAMES': 'frontend||backend', 'FIX_VERSIONS': 'v1.0', 'AFFECTS_VERSIONS': 'v0.9'
+        }
+        
+        mock_dependencies['enrichment'].return_value = ({}, {}, {}, {})
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        
+        # Verify component aggregation worked
+        assert len(result['issues']) == 1
+        issue = result['issues'][0]
+        assert issue['component'] == ['frontend', 'backend']
+        assert issue['component_name'] == 'frontend'  # First component
+        assert issue['sprint_id'] == '256'
+        assert issue['sprint_name'] == 'Sprint 256'
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_issue_deduplication(self, mock_mcp, mock_dependencies):
+        """Test that duplicate issues from joins are properly deduplicated"""
+        # Two rows for same issue ID (simulating duplicates from joins)
+        mock_dependencies['query'].return_value = [
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Short desc', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None,
+             '256', 'Sprint 256', 'frontend||backend', 'v1.0', 'v0.9'],
+            ['123', 'TEST-1', 'TEST', '1', 'Bug', 'Test Summary', 'Short desc', 'Full description',
+             'High', 'Open', None, '2024-01-01', '2024-01-02', None, None, '0', '1', None, None, None,
+             '256', 'Sprint 256', 'frontend||backend', 'v1.0', 'v0.9']
+        ]
+        
+        def mock_format_side_effect(row, columns):
+            return {
+                'ID': row[0], 'ISSUE_KEY': row[1], 'PROJECT': row[2],
+                'COMPONENT_NAMES': row[22], 'SPRINT_ID': row[20], 'SPRINT_NAME': row[21]
+            }
+        
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+        mock_dependencies['enrichment'].return_value = ({}, {}, {}, {})
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        
+        # Should only have one issue despite duplicate rows
+        assert result['total_returned'] == 1
+        assert len(result['issues']) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_skip_malformed_rows(self, mock_mcp, mock_dependencies):
+        """Test that rows with missing ID are properly skipped"""
+        mock_dependencies['query'].return_value = [["ignored"]]
+        
+        def mock_format_side_effect(row, columns):
+            return {"ID": None}  # Malformed row with no ID
+        
+        mock_dependencies['format'].side_effect = mock_format_side_effect
+        mock_dependencies['enrichment'].return_value = ({}, {}, {}, {})
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        
+        # No issues should be returned due to malformed row
+        assert result['total_returned'] == 0
+        assert result['issues'] == []
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_default_parameters(self, mock_mcp, mock_dependencies):
+        """Test get_jira_issues_by_sprint with default parameters"""
+        mock_dependencies['query'].return_value = []
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        
+        # Verify default parameters are applied
+        assert result['filters_applied']['sprint_name'] == 'Sprint 256'
+        assert result['filters_applied']['project'] is None
+        assert result['filters_applied']['limit'] == 50  # Default limit
+        
+        # Verify SQL uses default limit
+        mock_dependencies['query'].assert_called_once()
+        sql_call = mock_dependencies['query'].call_args[0][0]
+        assert "LIMIT 50" in sql_call
+
+    @pytest.mark.asyncio
+    async def test_get_jira_issues_by_sprint_exception_handling(self, mock_mcp, mock_dependencies):
+        """Test exception handling in get_jira_issues_by_sprint"""
+        mock_dependencies['token'].side_effect = Exception("Database error")
+        
+        register_tools(mock_mcp)
+        get_jira_issues_by_sprint = mock_mcp._registered_tools[4]
+        
+        result = await get_jira_issues_by_sprint('Sprint 256')
+        
+        assert 'error' in result
+        assert 'Database error' in result['error']
+        assert result['issues'] == []

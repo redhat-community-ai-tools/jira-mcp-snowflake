@@ -3,7 +3,7 @@ from typing import Any, Optional, Dict, List
 
 from mcp.server.fastmcp import FastMCP
 
-from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY, SNOWFLAKE_CONNECTION_METHOD
+from config import MCP_TRANSPORT, SNOWFLAKE_TOKEN, INTERNAL_GATEWAY, SNOWFLAKE_CONNECTION_METHOD, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA
 from database import (
     execute_snowflake_query,
     format_snowflake_row,
@@ -587,3 +587,201 @@ def register_tools(mcp: FastMCP) -> None:
 
         except Exception as e:
             return {"error": f"Error reading issue links from Snowflake: {str(e)}"}
+
+    @mcp.tool()
+    @track_tool_usage("get_jira_issues_by_sprint")
+    async def get_jira_issues_by_sprint(
+        sprint_name: str,
+        limit: int = 50,
+        project: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Get all JIRA issues in a specific sprint by sprint name from Snowflake.
+
+        Args:
+            sprint_name: The name of the sprint (e.g., 'Sprint 256')
+            limit: Maximum number of issues to return (default: 50)
+            project: Filter by project key (e.g., 'SMQE', 'OSIM')
+
+        Returns:
+            Dictionary containing issues in the sprint and metadata
+        """
+        try:
+            # Get the Snowflake token
+            snowflake_token = get_snowflake_token(mcp)
+            if not snowflake_token and SNOWFLAKE_CONNECTION_METHOD == "api":
+                return {"error": "Snowflake token not available", "issues": []}
+
+            # Build SQL query with sprint filter and optional project filter
+            sql_conditions = [f"s.name = '{sanitize_sql_value(sprint_name)}'"]
+
+            if project:
+                sql_conditions.append(f"i.PROJECT = '{sanitize_sql_value(project.upper())}'")
+
+            where_clause = "WHERE " + " AND ".join(sql_conditions)
+
+            # Build the SQL query based on the provided example
+            sql = f"""
+            SELECT
+                i.ID,
+                i.ISSUE_KEY,
+                i.PROJECT,
+                i.ISSUENUM,
+                i.ISSUETYPE,
+                i.SUMMARY,
+                SUBSTRING(i.DESCRIPTION, 1, 500) as DESCRIPTION_TRUNCATED,
+                i.DESCRIPTION,
+                i.PRIORITY,
+                i.ISSUESTATUS,
+                i.RESOLUTION,
+                i.CREATED,
+                i.UPDATED,
+                i.DUEDATE,
+                i.RESOLUTIONDATE,
+                i.VOTES,
+                i.WATCHES,
+                i.ENVIRONMENT,
+                i.COMPONENT,
+                i.FIXFOR,
+                cfv.stringvalue as SPRINT_ID,
+                s.name as SPRINT_NAME,
+                compagg.COMPONENT_NAMES,
+                veragg.FIX_VERSIONS,
+                veragg.AFFECTS_VERSIONS
+            FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_ISSUE_NON_PII i
+            JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_CUSTOMFIELDVALUE_NON_PII cfv
+                ON i.id = cfv.issue
+                AND cfv.customfield_name = 'Sprint'
+            JOIN {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.JIRA_SPRINT_RHAI s
+                ON CAST(cfv.stringvalue AS INTEGER) = s.id
+            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na
+                ON i.ID = na.SOURCE_NODE_ID
+                AND na.ASSOCIATION_TYPE = 'IssueComponent'
+            LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c
+                ON na.SINK_NODE_ID = c.ID
+            LEFT JOIN (
+                SELECT
+                    na2.SOURCE_NODE_ID AS ISSUE_ID,
+                    LISTAGG(DISTINCT c2.CNAME, '||') WITHIN GROUP (ORDER BY c2.CNAME) AS COMPONENT_NAMES
+                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na2
+                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_COMPONENT_RHAI c2
+                    ON na2.SINK_NODE_ID = c2.ID
+                WHERE na2.ASSOCIATION_TYPE = 'IssueComponent'
+                GROUP BY na2.SOURCE_NODE_ID
+            ) compagg ON compagg.ISSUE_ID = i.ID
+            LEFT JOIN (
+                SELECT
+                    na3.SOURCE_NODE_ID AS ISSUE_ID,
+                    LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueFixVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS FIX_VERSIONS,
+                    LISTAGG(CASE WHEN na3.ASSOCIATION_TYPE = 'IssueVersion' THEN pv.VNAME END, ', ') WITHIN GROUP (ORDER BY pv.VNAME) AS AFFECTS_VERSIONS
+                FROM JIRA_DB.RHAI_MARTS.JIRA_NODEASSOCIATION_RHAI na3
+                LEFT JOIN JIRA_DB.RHAI_MARTS.JIRA_PROJECTVERSION_NON_PII pv
+                    ON na3.SINK_NODE_ID = pv.ID
+                WHERE na3.ASSOCIATION_TYPE IN ('IssueFixVersion', 'IssueVersion')
+                    AND na3.SINK_NODE_ENTITY = 'Version'
+                    AND na3.SOURCE_NODE_ENTITY = 'Issue'
+                GROUP BY na3.SOURCE_NODE_ID
+            ) veragg ON veragg.ISSUE_ID = i.ID
+            {where_clause}
+            ORDER BY i.CREATED DESC
+            LIMIT {limit}
+            """
+
+            rows = await execute_snowflake_query(sql, snowflake_token)
+
+            # Expected column order based on SELECT statement
+            columns = [
+                "ID", "ISSUE_KEY", "PROJECT", "ISSUENUM", "ISSUETYPE", "SUMMARY",
+                "DESCRIPTION_TRUNCATED", "DESCRIPTION", "PRIORITY", "ISSUESTATUS",
+                "RESOLUTION", "CREATED", "UPDATED", "DUEDATE", "RESOLUTIONDATE",
+                "VOTES", "WATCHES", "ENVIRONMENT", "COMPONENT", "FIXFOR",
+                "SPRINT_ID", "SPRINT_NAME", "COMPONENT_NAMES", "FIX_VERSIONS", "AFFECTS_VERSIONS"
+            ]
+
+            # Process all rows and aggregate by unique issue
+            issues_by_id: Dict[str, Dict[str, Any]] = {}
+            issue_ids: List[str] = []
+
+            for row in rows:
+                # If using connector method, rows are already dictionaries
+                if isinstance(row, dict):
+                    row_dict = row
+                else:
+                    # API method returns raw rows that need formatting
+                    row_dict = format_snowflake_row(row, columns)
+
+                issue_id = row_dict.get("ID")
+                if issue_id is None:
+                    # Skip malformed rows
+                    continue
+
+                issue_id_str = str(issue_id)
+
+                if issue_id_str not in issues_by_id:
+                    # Initialize new issue entry
+                    issues_by_id[issue_id_str] = {
+                        "id": row_dict.get("ID"),
+                        "key": row_dict.get("ISSUE_KEY"),
+                        "project": row_dict.get("PROJECT"),
+                        "issue_number": row_dict.get("ISSUENUM"),
+                        "issue_type": row_dict.get("ISSUETYPE"),
+                        "summary": row_dict.get("SUMMARY"),
+                        "description": row_dict.get("DESCRIPTION_TRUNCATED") or "",
+                        "priority": row_dict.get("PRIORITY"),
+                        "status": row_dict.get("ISSUESTATUS"),
+                        "resolution": row_dict.get("RESOLUTION"),
+                        "created": row_dict.get("CREATED"),
+                        "updated": row_dict.get("UPDATED"),
+                        "due_date": row_dict.get("DUEDATE"),
+                        "resolution_date": row_dict.get("RESOLUTIONDATE"),
+                        "votes": row_dict.get("VOTES"),
+                        "watches": row_dict.get("WATCHES"),
+                        "environment": row_dict.get("ENVIRONMENT"),
+                        "component": [],
+                        "fix_version": row_dict.get("FIXFOR"),
+                        "fixed_version": row_dict.get("FIX_VERSIONS") or "",
+                        "affected_version": row_dict.get("AFFECTS_VERSIONS") or "",
+                        "sprint_id": row_dict.get("SPRINT_ID"),
+                        "sprint_name": row_dict.get("SPRINT_NAME"),
+                        "component_name": None,
+                    }
+                    issue_ids.append(issue_id_str)
+
+                # Aggregate component names from the precomputed aggregation string
+                comp_names_str = row_dict.get("COMPONENT_NAMES") or ""
+                if comp_names_str:
+                    current_components = issues_by_id[issue_id_str]["component"]
+                    # Split and add uniquely while preserving order
+                    for name in [n.strip() for n in comp_names_str.split("||") if n and n.strip()]:
+                        if name not in current_components:
+                            current_components.append(name)
+                    # Set a representative component_name for compatibility (first in list)
+                    issues_by_id[issue_id_str]["component_name"] = current_components[0] if current_components else None
+
+            # Get labels, comments, and links concurrently for better performance
+            track_concurrent_operation("sprint_issue_enrichment")
+            labels_data, comments_data, links_data, status_changes_data = await get_issue_enrichment_data_concurrent(
+                issue_ids, snowflake_token
+            )
+
+            # Enrich issues with labels and links (no status changes in list view)
+            issues = list(issues_by_id.values())
+            for issue in issues:
+                issue_id = str(issue['id'])
+                issue['labels'] = labels_data.get(issue_id, [])
+                issue['links'] = links_data.get(issue_id, [])
+                # Don't add comments or status changes to list view to keep it lightweight
+
+            return {
+                "issues": issues,
+                "total_returned": len(issues),
+                "sprint_name": sprint_name,
+                "filters_applied": {
+                    "sprint_name": sprint_name,
+                    "project": project,
+                    "limit": limit
+                }
+            }
+
+        except Exception as e:
+            return {"error": f"Error reading sprint issues from Snowflake: {str(e)}", "issues": []}
