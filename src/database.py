@@ -348,26 +348,43 @@ async def execute_snowflake_query_connector(
             track_snowflake_query(start_time, True)
             return cached_result
 
-    try:
-        # Execute in thread pool to avoid blocking async event loop
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(_thread_pool, _execute_connector_query_sync, sql)
+    # Retry logic for token expiration
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            # Execute in thread pool to avoid blocking async event loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(_thread_pool, _execute_connector_query_sync, sql)
 
-        success = True
+            success = True
 
-        # Cache successful SELECT results
-        if use_cache and cache_key and result is not None:
-            set_in_cache(cache_key, result)
-            logger.debug(f"Cached connector SQL result: {sql[:50]}...")
+            # Cache successful SELECT results
+            if use_cache and cache_key and result is not None:
+                set_in_cache(cache_key, result)
+                logger.debug(f"Cached connector SQL result: {sql[:50]}...")
 
-        return result if result is not None else []
+            track_snowflake_query(start_time, success)
+            return result if result is not None else []
 
-    except Exception as e:
-        logger.error(f"Error executing Snowflake connector query: {str(e)}")
-        logger.error(f"Query that failed: {sql}")
-        return []
-    finally:
-        track_snowflake_query(start_time, success)
+        except SnowflakeError as e:
+            error_code = getattr(e, 'errno', None)
+            if error_code == 390114 and attempt < max_retries - 1:  # Token expired, retry once
+                logger.info(f"Token expired on attempt {attempt + 1}, retrying...")
+                continue
+            else:
+                logger.error(f"Error executing Snowflake connector query: {str(e)}")
+                logger.error(f"Query that failed: {sql}")
+                track_snowflake_query(start_time, False)
+                return []
+        except Exception as e:
+            logger.error(f"Error executing Snowflake connector query: {str(e)}")
+            logger.error(f"Query that failed: {sql}")
+            track_snowflake_query(start_time, False)
+            return []
+
+    # If we get here, all retries failed
+    track_snowflake_query(start_time, False)
+    return []
 
 
 def _execute_connector_query_sync(sql: str) -> List[Dict[str, Any]]:
@@ -412,7 +429,15 @@ def _execute_connector_query_sync(sql: str) -> List[Dict[str, Any]]:
         return formatted_results
 
     except SnowflakeError as e:
+        error_code = getattr(e, 'errno', None)
         logger.error(f"Snowflake connector error: {str(e)}")
+
+        # Handle token expiration errors by forcing connection refresh
+        if error_code == 390114:  # Authentication token expired
+            logger.info("Authentication token expired, forcing connection refresh")
+            pool = get_connector_pool()
+            pool.close()  # Force close expired connection
+
         raise
     except Exception as e:
         logger.error(f"Unexpected error in connector query: {str(e)}")
