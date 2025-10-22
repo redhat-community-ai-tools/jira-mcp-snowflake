@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 dependencies = [
     "httpx[http2]==0.28.1",
     "mcp==1.18.0",
-    "prometheus_client==0.20.0",
+    "prometheus_client==0.23.1",
     "cachetools==5.3.2",
     "asyncio-throttle==1.0.2",
     "snowflake-connector-python>=3.12.0",
