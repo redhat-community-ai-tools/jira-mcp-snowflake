@@ -30,6 +30,7 @@ coverage.xml
 *.swo
 *~
 .DS_Store
+.cursor/
 
 # Documentation
 CHANGELOG.md
@@ -41,6 +42,8 @@ scripts/
 
 # OpenShift deployment files
 openshift/
+.tekton/
+.github/
 
 # Development files
 .env
