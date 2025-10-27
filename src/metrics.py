@@ -188,6 +188,9 @@ def start_metrics_server() -> None:
 def start_metrics_thread() -> None:
     """Start metrics server in a background thread"""
     if ENABLE_METRICS and PROMETHEUS_AVAILABLE:
+        logger.info("Starting metrics server")
         metrics_thread = threading.Thread(target=start_metrics_server, daemon=True)
         metrics_thread.start()
         set_active_connections(1)
+    else:
+        logger.info("Metrics server not started")
