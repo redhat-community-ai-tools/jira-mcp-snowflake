@@ -4,12 +4,13 @@ A Model Context Protocol (MCP) server that provides access to JIRA issue data st
 
 ## Overview
 
-This MCP server connects to Snowflake to query JIRA data and provides four main tools for interacting with the data:
+This MCP server connects to Snowflake to query JIRA data and provides five main tools for interacting with the data:
 
 - **`list_jira_issues`** - Query and filter JIRA issues with various criteria
-- **`get_jira_issue_details`** - Get detailed information for a specific issue by key
+- **`get_jira_issue_details`** - Get detailed information for multiple issues by their keys
 - **`get_jira_project_summary`** - Get statistics and summaries for all projects
-- **`list_jira_components`** - List and filter JIRA components with various criteria
+- **`get_jira_issue_links`** - Get issue links for a specific JIRA issue by its key
+- **`get_jira_issues_by_sprint`** - Get all JIRA issues in a specific sprint by sprint name
 
 ## Features
 
@@ -19,6 +20,14 @@ The server connects to Snowflake and queries the following tables:
 - `JIRA_LABEL_RHAI` - Issue labels and tags
 - `JIRA_COMMENT_NON_PII` - Issue comments (non-personally identifiable information)
 - `JIRA_COMPONENT_RHAI` - JIRA project components and their metadata
+- `JIRA_NODEASSOCIATION_RHAI` - Associations between JIRA entities (issues, components, versions)
+- `JIRA_PROJECTVERSION_NON_PII` - Project versions (fix versions and affected versions)
+- `JIRA_ISSUELINK_RHAI` - Links between JIRA issues
+- `JIRA_ISSUELINKTYPE_RHAI` - Types of issue links
+- `JIRA_CUSTOMFIELDVALUE_NON_PII` - Custom field values (e.g., sprint information)
+- `JIRA_SPRINT_RHAI` - Sprint data
+- `JIRA_CHANGEGROUP_RHAI` - Change history groups
+- `JIRA_CHANGEITEM_RHAI` - Individual change items (e.g., status changes)
 
 **Note**: Table names are expected to exist in your configured Snowflake database and schema.
 
@@ -27,20 +36,41 @@ The server connects to Snowflake and queries the following tables:
 #### 1. List Issues (`list_jira_issues`)
 Query JIRA issues with optional filtering:
 - **Project filtering** - Filter by project key (e.g., 'SMQE', 'OSIM')
+- **Issue keys filtering** - Filter by specific issue keys (e.g., ['SMQE-1280', 'SMQE-1281'])
 - **Issue type filtering** - Filter by issue type ID
 - **Status filtering** - Filter by issue status ID  
 - **Priority filtering** - Filter by priority ID
 - **Text search** - Search in summary and description fields
+- **Component filtering** - Filter by component names (comma-separated, matches any)
+- **Version filtering** - Filter by fixed version or affected version name
+- **Date filtering** - Filter by creation, update, or resolution date within last N days
+- **Timeframe filtering** - Filter issues where any date (created, updated, or resolved) is within last N days
 - **Result limiting** - Control number of results returned (default: 50)
 
+Returns issue information including:
+- Basic issue information (summary, description, status, priority)
+- Timestamps (created, updated, due date, resolution date)
+- Metadata (votes, watches, environment, components)
+- Associated labels and links
+- Fixed and affected versions
+
 #### 2. Get Issue Details (`get_jira_issue_details`)
-Retrieve comprehensive information for a specific JIRA issue by its key (e.g., 'SMQE-1280'), including:
+Retrieve comprehensive information for multiple JIRA issues by their keys (e.g., ['SMQE-1280', 'SMQE-1281']), including:
 - Basic issue information (summary, description, status, priority)
 - Timestamps (created, updated, due date, resolution date)
 - Time tracking (original estimate, current estimate, time spent)
-- Metadata (votes, watches, environment, components)
+- Metadata (votes, watches, environment, components, workflow ID, security, archived status)
 - Associated labels
 - Comments (with comment body, creation/update timestamps, and role level)
+- Issue links (inward and outward)
+- Status change history
+- Fixed and affected versions
+
+Returns a dictionary with:
+- `found_issues` - Dictionary of found issues keyed by issue key
+- `not_found` - List of issue keys that were not found
+- `total_found` - Number of issues found
+- `total_requested` - Number of issues requested
 
 #### 3. Get Project Summary (`get_jira_project_summary`)
 Generate statistics across all projects:
@@ -49,20 +79,28 @@ Generate statistics across all projects:
 - Priority distribution per project
 - Overall statistics
 
-#### 4. List Components (`list_jira_components`)
-Query and filter JIRA components with optional criteria:
-- **Project filtering** - Filter by project ID (e.g., '12325621')
-- **Archived filtering** - Filter by archived status ('Y' or 'N')
-- **Deleted filtering** - Filter by deleted status ('Y' or 'N')
-- **Text search** - Search in component name and description fields
+#### 4. Get Issue Links (`get_jira_issue_links`)
+Get issue links for a specific JIRA issue by its key (e.g., 'SMQE-1280'):
+- **Issue links** - Relationships to other issues (blocks, is blocked by, relates to, etc.)
+- **Link direction** - Indicates if the link is inward or outward
+- **Linked issue details** - Information about the linked issue
+
+Returns information including:
+- Issue key and ID
+- List of all issue links with link type and direction
+- Total count of links
+
+#### 5. Get Issues by Sprint (`get_jira_issues_by_sprint`)
+Get all JIRA issues in a specific sprint by sprint name:
+- **Sprint filtering** - Filter by sprint name (e.g., 'Sprint 256')
+- **Project filtering** - Optional filter by project key (e.g., 'SMQE', 'OSIM')
 - **Result limiting** - Control number of results returned (default: 50)
 
-Returns component information including:
-- Component ID, project, name, and description
-- Component URL and assignee details
-- Archived and deleted status
-- Lead information and assignee type
-- Last sync timestamp
+Returns issue information including:
+- All standard issue fields (same as `list_jira_issues`)
+- Sprint ID and sprint name
+- Associated labels and links
+- Fixed and affected versions
 
 ### Monitoring & Metrics
 
@@ -400,10 +438,72 @@ result = await list_jira_issues(project="SMQE", limit=10)
 result = await list_jira_issues(search_text="authentication", limit=20)
 ```
 
+### Filter Issues by Component
+```python
+# Find issues in specific components
+result = await list_jira_issues(components="Security,Authentication", limit=20)
+```
+
+### Filter Issues by Version
+```python
+# Find issues with a specific fixed version
+result = await list_jira_issues(fixed_version="2.5.0", limit=20)
+```
+
+### Filter Issues by Date
+```python
+# Find issues created in the last 7 days
+result = await list_jira_issues(created_days=7, limit=20)
+
+# Find issues updated in the last 30 days
+result = await list_jira_issues(updated_days=30, limit=50)
+```
+
 ### Get Specific Issue Details
 ```python
-# Get detailed information for a specific issue
-result = await get_jira_issue_details(issue_key="SMQE-1280")
+# Get detailed information for multiple issues
+result = await get_jira_issue_details(issue_keys=["SMQE-1280", "SMQE-1281"])
+
+# Access the results
+for issue_key, issue_data in result["found_issues"].items():
+    print(f"Issue: {issue_key}")
+    print(f"Summary: {issue_data['summary']}")
+    print(f"Status: {issue_data['status']}")
+    print(f"Labels: {issue_data['labels']}")
+    print(f"Comments: {len(issue_data['comments'])}")
+```
+
+### Get Issue Links
+```python
+# Get all issue links for a specific issue
+result = await get_jira_issue_links(issue_key="SMQE-1280")
+
+# Access the links
+print(f"Total links: {result['total_links']}")
+for link in result['links']:
+    print(f"Link type: {link['link_type']}")
+    print(f"Direction: {link['direction']}")
+    print(f"Linked issue: {link['linked_issue_key']}")
+```
+
+### Get Issues by Sprint
+```python
+# Get all issues in a specific sprint
+result = await get_jira_issues_by_sprint(sprint_name="Sprint 256", limit=50)
+
+# Get issues in a sprint for a specific project
+result = await get_jira_issues_by_sprint(
+    sprint_name="Sprint 256",
+    project="SMQE",
+    limit=50
+)
+
+# Access the results
+print(f"Sprint: {result['sprint_name']}")
+print(f"Total issues: {result['total_returned']}")
+for issue in result['issues']:
+    print(f"Issue: {issue['key']} - {issue['summary']}")
+    print(f"Status: {issue['status']}")
 ```
 
 ### Get Project Overview
