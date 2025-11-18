@@ -631,7 +631,7 @@ requires-dist = [
     { name = "asyncio-throttle", specifier = "==1.0.2" },
     { name = "cachetools", specifier = "==5.3.2" },
     { name = "httpx", extras = ["http2"], specifier = "==0.28.1" },
-    { name = "mcp", specifier = "==1.21.1" },
+    { name = "mcp", specifier = "==1.21.2" },
     { name = "prometheus-client", specifier = "==0.23.1" },
     { name = "snowflake-connector-python", specifier = ">=3.12.0" },
 ]
@@ -692,7 +692,7 @@ wheels = [
 
 [[package]]
 name = "mcp"
-version = "1.21.1"
+version = "1.21.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -710,9 +710,9 @@ dependencies = [
     { name = "typing-inspection" },
     { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f7/25/4df633e7574254ada574822db2245bbee424725d1b01bccae10bf128794e/mcp-1.21.1.tar.gz", hash = "sha256:540e6ac4b12b085c43f14879fde04cbdb10148a09ea9492ff82d8c7ba651a302", size = 469071, upload-time = "2025-11-13T20:33:46.139Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/15/bb/147bf5d47b8d6f3fb315204cd2f567b1ad85511acd8d59e85cccf7cce65c/mcp-1.21.2.tar.gz", hash = "sha256:b6497b7f7a77aabe263931a3335956dfd45fe8b1e2168931e455914ba1a7f4c9", size = 470799, upload-time = "2025-11-17T13:56:06.397Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/af/01fb42df59ad15925ffc1e2e609adafddd3ac4572f606faae0dc8b55ba0c/mcp-1.21.1-py3-none-any.whl", hash = "sha256:dd35abe36d68530a8a1291daa25d50276d8731e545c0434d6e250a3700dd2a6d", size = 174852, upload-time = "2025-11-13T20:33:44.502Z" },
+    { url = "https://files.pythonhosted.org/packages/67/0f/669ecbe78a0ba192afcc0b026ae62d1005779e91bad27ab9d703401510bf/mcp-1.21.2-py3-none-any.whl", hash = "sha256:59413ef15db757a785e3859548c1a7ffc7be57bf162c3c24afc0e04fd9f4181c", size = 174854, upload-time = "2025-11-17T13:56:04.987Z" },
 ]
 
 [[package]]
