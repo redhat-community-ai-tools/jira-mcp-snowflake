@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "httpx[http2]==0.28.1",
-    "mcp==1.27.1",
+    "mcp==1.27.2",
     "prometheus_client==0.25.0",
     "cachetools==7.1.4",
     "asyncio-throttle==1.0.2",
